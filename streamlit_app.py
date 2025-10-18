@@ -347,7 +347,7 @@ fig2 = px.line(daily_df, x="date", y="cumulative_spent",
 fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", 
                 name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
 
-# Responsive layout settings
+# Responsive layout settings - disable interactivity for mobile
 fig2.update_layout(
     height=300,  # Slightly shorter for mobile
     margin=dict(t=50, l=20, r=20, b=20),  # Tighter margins
@@ -369,8 +369,13 @@ fig2.update_layout(
         title="DKK",  # Short y-axis title
         title_font=dict(size=12),
         tickfont=dict(size=10)
-    )
+    ),
+    # Disable interactivity for mobile-friendly experience
+    dragmode=False
 )
+
+# Disable hover and interactions
+fig2.update_traces(hoverinfo='skip', hovertemplate=None)
 
 st.plotly_chart(fig2, use_container_width=True)
 
@@ -504,8 +509,12 @@ for i, period in enumerate(periods):
                                 autorange="reversed",  # keep largest on top
                                 title=""  # Remove y-axis label
                             ),
-                            showlegend=False
+                            showlegend=False,
+                            # Disable interactivity for mobile
+                            dragmode=False
                         )
+                        # Disable hover and interactions
+                        fig_small.update_traces(hoverinfo='skip', hovertemplate=None)
                         st.plotly_chart(fig_small, use_container_width=True)
         except Exception:
             # If plotting fails, skip gracefully
