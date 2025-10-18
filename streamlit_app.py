@@ -345,29 +345,31 @@ for i, period in enumerate(periods):
     month_df = df.loc[mask].copy()
     display_label = period.strftime("%b %Y")  # e.g. "Oct 2025"
     with col:
-        st.subheader(display_label)
-        if month_df.empty:
-            st.write("No data")
-            continue
-
         # Calculate totals for this month in DKK
         total_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
         total_income_dkk = month_df[month_df["amount_dkk"] > 0]["amount_dkk"].sum()
         
-        # Display totals at the top
-        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK | 💰 Income: {total_income_dkk:,.0f} DKK")
+        # Count expense items (unique counterparties with expenses)
+        expense_counterparties = month_df[month_df["amount_dkk"] < 0]["counterparty"].nunique()
+        
+        st.subheader(display_label)
+        if month_df.empty:
+            st.write("No data")
+            continue
+        
+        # Display totals and item count at the top
+        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK ({expense_counterparties} items) | 💰 Income: {total_income_dkk:,.0f} DKK")
 
-        # Summarize ALL counterparties by their net amount (expenses + income) in DKK
+        # Summarize expense counterparties only (remove income from table)
         counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
         
-        # Separate expenses and income, convert expenses to positive for display
+        # Only get expenses, convert to positive for display
         cp_expenses = counterparty_summary[counterparty_summary < 0].abs().sort_values(ascending=False)
-        cp_income = counterparty_summary[counterparty_summary > 0].sort_values(ascending=False)
         
-        # Combine expenses and income for display (expenses first, then income)
+        # Create display data with expenses only
         display_data = []
         
-        # Add expenses (negative amounts, but show as positive)
+        # Add expenses only (negative amounts, but show as positive)
         for cp, amount in cp_expenses.items():
             category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
             display_data.append({
@@ -375,16 +377,6 @@ for i, period in enumerate(periods):
                 "Amount (DKK)": int(amount), 
                 "Category": category,
                 "Type": "Expense"
-            })
-        
-        # Add income (positive amounts)
-        for cp, amount in cp_income.items():
-            category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
-            display_data.append({
-                "Counterparty": cp, 
-                "Amount (DKK)": int(amount), 
-                "Category": category,
-                "Type": "Income"
             })
         
         if display_data:
