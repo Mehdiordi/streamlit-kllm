@@ -9,6 +9,12 @@ import boto3
 import io
 from botocore.exceptions import ClientError
 
+# Import personal categories for expense categorization
+try:
+    from config import personal_categories
+except ImportError:
+    personal_categories = {}  # Fallback if config.py doesn't exist
+
 st.set_page_config(page_title="Simple Budget Tracker", layout="wide")
 st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Simple Budget Tracker</h1>", unsafe_allow_html=True)
 st.write("A minimal, clear view of monthly & weekly spending vs limits. Upload your CSV or point to a local path.")
@@ -165,6 +171,34 @@ def to_dkk(row):
 df["amount_dkk"] = df.apply(to_dkk, axis=1)
 # Consider expenses as absolute of negative amounts
 df["expense_dkk"] = df["amount_dkk"].apply(lambda x: abs(x) if x < 0 else 0.0)
+
+# Categorization function
+def categorize_counterparty(counterparty):
+    """Categorize counterparty based on personal_categories config"""
+    if pd.isna(counterparty):
+        return "no-category"
+    
+    counterparty_str = str(counterparty).strip()
+    
+    # Direct match first
+    if counterparty_str in personal_categories:
+        return personal_categories[counterparty_str]
+    
+    # Special case for Lidl stores (dynamic matching)
+    if 'lidl' in counterparty_str.lower():
+        return 'Groceries'
+    
+    # Check for partial matches (case-insensitive)
+    counterparty_lower = counterparty_str.lower()
+    for key, category in personal_categories.items():
+        if key.lower() in counterparty_lower:
+            return category
+    
+    # Default category for uncategorized items
+    return "no-category"
+
+# Apply categorization
+df["category"] = df["counterparty"].apply(categorize_counterparty)
 
 # Reference dates
 last_date = df["date"].max().normalize()
@@ -338,8 +372,8 @@ st.header("Top counterparties")
 # Build the 4 monthly periods (reference = last_date from CSV)
 last_period = last_date.to_period("M")
 periods = [last_period - i for i in range(0, 4)]  # last_period, last-1, last-2, last-3
-# Show oldest -> newest (left -> right)
-periods = list(reversed(periods))
+# Show newest -> oldest (left -> right): Oct, Sep, Aug, Jul
+# periods is already in the correct order: [Oct, Sep, Aug, Jul]
 
 cols = st.columns(4)
 for i, period in enumerate(periods):
@@ -354,41 +388,93 @@ for i, period in enumerate(periods):
             st.write("No data")
             continue
 
-        # Summarize top counterparties by expense (DKK)
-        top_cp = (
-            month_df.groupby("counterparty")["expense_dkk"]
-            .sum()
-            .abs()
-            .sort_values(ascending=False)
-            .head(8)
-        )
+        # Calculate totals for this month in DKK
+        total_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+        total_income_dkk = month_df[month_df["amount_dkk"] > 0]["amount_dkk"].sum()
+        
+        # Display totals at the top
+        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK | 💰 Income: {total_income_dkk:,.0f} DKK")
 
-        # Prepare table for display (formatted)
-        table_df = top_cp.rename("Total expense (DKK)").to_frame()
-        table_df["Total expense (DKK)"] = table_df["Total expense (DKK)"].round(0).astype(int)
-        # Show small table
-        st.table(table_df)
+        # Summarize ALL counterparties by their net amount (expenses + income) in DKK
+        counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
+        
+        # Separate expenses and income, convert expenses to positive for display
+        cp_expenses = counterparty_summary[counterparty_summary < 0].abs().sort_values(ascending=False)
+        cp_income = counterparty_summary[counterparty_summary > 0].sort_values(ascending=False)
+        
+        # Combine expenses and income for display (expenses first, then income)
+        display_data = []
+        
+        # Add expenses (negative amounts, but show as positive)
+        for cp, amount in cp_expenses.items():
+            category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
+            display_data.append({
+                "Counterparty": cp, 
+                "Amount (DKK)": int(amount), 
+                "Category": category,
+                "Type": "Expense"
+            })
+        
+        # Add income (positive amounts)
+        for cp, amount in cp_income.items():
+            category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
+            display_data.append({
+                "Counterparty": cp, 
+                "Amount (DKK)": int(amount), 
+                "Category": category,
+                "Type": "Income"
+            })
+        
+        if display_data:
+            table_df = pd.DataFrame(display_data)
+            # Show scrollable table with max 5 visible rows
+            st.dataframe(
+                table_df, 
+                height=200,  # Fixed height to show ~5 rows with scroll
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.write("No transactions")
+            continue
 
-        # Mini horizontal bar chart for quick visual
+        # Mini horizontal bar chart by categories (show top expense categories only)
         try:
-            plot_df = table_df.reset_index().rename(columns={"counterparty": "Counterparty", "Total expense (DKK)": "Amount"})
-            if not plot_df.empty:
-                fig_small = px.bar(
-                    plot_df,
-                    x="Amount",
-                    y="Counterparty",
-                    orientation="h",
-                    text="Amount",
-                    color_discrete_sequence=["#2E8B57"],
-                )
-                fig_small.update_traces(texttemplate="%{text:,}", textposition="inside")
-                fig_small.update_layout(
-                    height=220,
-                    margin=dict(t=10, l=10, r=10, b=10),
-                    xaxis_title="DKK",
-                    yaxis=dict(autorange="reversed")  # keep largest on top
-                )
-                st.plotly_chart(fig_small, use_container_width=True)
+            if not month_df.empty:
+                # Group expenses by category for the current month
+                expense_month_df = month_df[month_df["amount_dkk"] < 0].copy()
+                if not expense_month_df.empty:
+                    category_expenses = (
+                        expense_month_df.groupby("category")["amount_dkk"]
+                        .sum()
+                        .abs()  # Convert to positive
+                        .sort_values(ascending=False)
+                        .head(8)  # Top 8 categories
+                    )
+                    
+                    if not category_expenses.empty:
+                        category_plot_df = pd.DataFrame({
+                            "Category": category_expenses.index,
+                            "Amount (DKK)": category_expenses.values.astype(int)
+                        })
+                        
+                        fig_small = px.bar(
+                            category_plot_df,
+                            x="Amount (DKK)",
+                            y="Category",
+                            orientation="h",
+                            text="Amount (DKK)",
+                            color_discrete_sequence=["#D9534F"],  # Red for expenses
+                        )
+                        fig_small.update_traces(texttemplate="%{text:,}", textposition="inside")
+                        fig_small.update_layout(
+                            height=220,
+                            margin=dict(t=10, l=10, r=10, b=10),
+                            xaxis_title="DKK",
+                            yaxis=dict(autorange="reversed"),  # keep largest on top
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig_small, use_container_width=True)
         except Exception:
             # If plotting fails, skip gracefully
             pass
