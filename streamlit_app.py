@@ -451,8 +451,8 @@ for i, period in enumerate(periods):
             display_data.append({
                 "Counterparty": cp, 
                 "Amount (DKK)": int(amount), 
-                "Category": category,
-                "Datetime": datetime_str
+                "Datetime": datetime_str,
+                "Category": category
             })
         
         if display_data:
