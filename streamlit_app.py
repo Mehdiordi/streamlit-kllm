@@ -15,7 +15,7 @@ st.write("A minimal, clear view of monthly & weekly spending vs limits. Upload y
 
 # Sidebar - data source and limits
 st.sidebar.header("Data / Limits")
-default_path = Path("data/20250928_transaction-history_wise.csv")
+default_path = Path("")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
 
 monthly_limit = st.sidebar.number_input("Monthly limit (DKK)", min_value=0, value=18000, step=500, format="%d")
@@ -51,13 +51,19 @@ def load_csv_from_s3(bucket: str, key: str, aws_access_key_id=None, aws_secret_a
     body = obj["Body"].read()
     return pd.read_csv(io.BytesIO(body))
 
-# Determine data source (uploader prioritized, then local path, then S3 via secrets)
+# Determine data source (uploader prioritized, then S3 if configured, then local path)
 use_uploader = st.sidebar.checkbox("Upload CSV", value=False)
 uploaded_file = st.sidebar.file_uploader("Transaction CSV", type=["csv"]) if use_uploader else None
-# csv_path sidebar input is already present earlier
 
 df_raw = None
 data_source = "None"
+
+# read S3 secrets now to decide precedence
+s3_bucket = st.secrets.get("S3_BUCKET")
+s3_key = st.secrets.get("S3_KEY", "data/home_expenses.csv")
+aws_id = st.secrets.get("AWS_ACCESS_KEY_ID")
+aws_secret = st.secrets.get("AWS_SECRET_ACCESS_KEY")
+aws_region = st.secrets.get("AWS_REGION", None)
 
 if use_uploader and uploaded_file is not None:
     try:
@@ -67,45 +73,33 @@ if use_uploader and uploaded_file is not None:
         st.error(f"Failed to read uploaded CSV: {e}")
         st.stop()
 else:
-    try:
-        # try local path first
-        if csv_path and Path(csv_path).exists():
-            df_raw = load_csv_from_buffer(csv_path)
-            data_source = f"Local path: {csv_path}"
-        else:
-            # fallback to S3 (expects secrets set: AWS_*, S3_BUCKET, S3_KEY)
-            s3_bucket = st.secrets.get("S3_BUCKET")
-            s3_key = st.secrets.get("S3_KEY", "data/home_expenses.csv")
-            aws_id = st.secrets.get("AWS_ACCESS_KEY_ID")
-            aws_secret = st.secrets.get("AWS_SECRET_ACCESS_KEY")
-            aws_region = st.secrets.get("AWS_REGION", None)
+    # If S3 is configured, try S3 first (so deployed app reads S3 by default)
+    if s3_bucket and s3_key:
+        try:
+            df_raw = load_csv_from_s3(
+                bucket=s3_bucket,
+                key=s3_key,
+                aws_access_key_id=aws_id,
+                aws_secret_access_key=aws_secret,
+                region_name=aws_region,
+            )
+            data_source = f"S3: s3://{s3_bucket}/{s3_key}"
+        except Exception as e:
+            st.warning(f"S3 read failed ({e}); falling back to local file if available.")
+            df_raw = None
 
-            if s3_bucket and s3_key:
-                try:
-                    df_raw = load_csv_from_s3(
-                        bucket=s3_bucket,
-                        key=s3_key,
-                        aws_access_key_id=aws_id,
-                        aws_secret_access_key=aws_secret,
-                        region_name=aws_region,
-                    )
-                    data_source = f"S3: s3://{s3_bucket}/{s3_key}"
-                except ClientError as ce:
-                    st.error(f"S3 access error: {ce}")
-                    st.stop()
-                except Exception as e:
-                    st.error(f"Failed to read CSV from S3: {e}")
-                    st.stop()
-            else:
-                st.error("No valid CSV found: local path doesn't exist and S3 secrets/key not configured.")
-                st.stop()
-    except Exception as e:
-        st.error(f"Failed to read local CSV: {e}")
+    # If S3 didn't provide data, try local path
+    if df_raw is None:
+        try:
+            if csv_path and Path(csv_path).exists():
+                df_raw = load_csv_from_buffer(csv_path)
+                data_source = f"Local path: {csv_path}"
+        except Exception as e:
+            st.error(f"Failed to read local CSV: {e}")
+            st.stop()
+    if df_raw is None:
+        st.error("No valid CSV found: upload one, set local path, or configure S3 secrets (S3_BUCKET/S3_KEY).")
         st.stop()
-
-if df_raw is None:
-    st.error("Could not load CSV from any source.")
-    st.stop()
 
 st.caption(data_source)
 # normalize column names
