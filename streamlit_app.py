@@ -32,6 +32,10 @@ FX_MAP = {"DKK": 1.0, "EUR": float(fx_dkk), "USD": float(fx_usd)}
 # -----------------------------------------------------------------------------
 # CSV loading helpers: uploader -> local path -> S3 (using st.secrets)
 # -----------------------------------------------------------------------------
+import io
+import boto3
+from botocore.exceptions import ClientError
+
 @st.cache_data
 def load_csv_from_buffer(buf):
     return pd.read_csv(buf)
@@ -50,6 +54,7 @@ def load_csv_from_s3(bucket: str, key: str, aws_access_key_id=None, aws_secret_a
 # Determine data source (uploader prioritized, then local path, then S3 via secrets)
 use_uploader = st.sidebar.checkbox("Upload CSV", value=False)
 uploaded_file = st.sidebar.file_uploader("Transaction CSV", type=["csv"]) if use_uploader else None
+# csv_path sidebar input is already present earlier
 
 df_raw = None
 data_source = "None"
@@ -63,7 +68,7 @@ if use_uploader and uploaded_file is not None:
         st.stop()
 else:
     try:
-        # local path first
+        # try local path first
         if csv_path and Path(csv_path).exists():
             df_raw = load_csv_from_buffer(csv_path)
             data_source = f"Local path: {csv_path}"
