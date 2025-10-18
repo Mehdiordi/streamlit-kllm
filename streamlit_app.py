@@ -430,27 +430,24 @@ for i, period in enumerate(periods):
             
         st.caption(f"💸 {net_expense_dkk:,.0f} DKK | {income_display} | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
 
-        # Summarize expense counterparties only (remove income from table)
-        counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
+        # Show individual expense transactions (remove income from table)
+        expense_transactions = month_df[month_df["amount_dkk"] < 0].copy()
+        expense_transactions = expense_transactions.sort_values("amount_dkk")  # Sort by amount (most negative first)
         
-        # Only get expenses, convert to positive for display
-        cp_expenses = counterparty_summary[counterparty_summary < 0].abs().sort_values(ascending=False)
-        
-        # Create display data with expenses only
+        # Create display data with individual transactions
         display_data = []
         
-        # Add expenses only (negative amounts, but show as positive)
-        for cp, amount in cp_expenses.items():
-            category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
-            # Get the latest transaction date for this counterparty in this month
-            cp_transactions = month_df[month_df["counterparty"] == cp]
-            latest_transaction = cp_transactions["date"].max()
+        # Add individual expense transactions (show as positive amounts)
+        for _, transaction in expense_transactions.iterrows():
+            amount_dkk = abs(transaction["amount_dkk"])
+            counterparty = transaction["counterparty"]
+            category = transaction["category"]
             # Format as MM-DD HH:MM
-            datetime_str = latest_transaction.strftime("%m-%d %H:%M")
+            datetime_str = transaction["date"].strftime("%m-%d %H:%M")
             
             display_data.append({
-                "Counterparty": cp, 
-                "Amount (DKK)": int(amount), 
+                "Counterparty": counterparty, 
+                "Amount (DKK)": int(amount_dkk), 
                 "Datetime": datetime_str,
                 "Category": category
             })
