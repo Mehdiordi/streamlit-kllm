@@ -15,7 +15,7 @@ st.write("A minimal, clear view of monthly & weekly spending vs limits. Upload y
 
 # Sidebar - data source and limits
 st.sidebar.header("Data / Limits")
-default_path = Path("")
+default_path = Path("data/transaction-history.csv")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
 
 monthly_limit = st.sidebar.number_input("Monthly limit (DKK)", min_value=0, value=18000, step=500, format="%d")
