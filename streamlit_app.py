@@ -15,11 +15,9 @@ try:
 except ImportError:
     personal_categories = {}  # Fallback if config.py doesn't exist
 
-st.set_page_config(page_title="Simple Budget Tracker", layout="wide")
-st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Simple Budget Tracker</h1>", unsafe_allow_html=True)
-st.write("A minimal, clear view of monthly & weekly spending vs limits. Upload your CSV or point to a local path.")
+st.set_page_config(page_title=" Budget Tracker", layout="wide")
+st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
 
-# Sidebar - data source and limits
 st.sidebar.header("Data / Limits")
 default_path = Path("data/transaction-history.csv")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
@@ -107,7 +105,6 @@ else:
         st.error("No transaction data found: upload a file, set local path, or configure S3 secrets (S3_BUCKET/S3_KEY).")
         st.stop()
 
-st.caption(data_source)
 # normalize column names
 df_raw.columns = [c.strip() for c in df_raw.columns]
 
@@ -241,13 +238,11 @@ week_pct = min(max(spent_week_cumulative / accumulated_weekly_limit, 0), 2) if a
 
 # Layout: top metrics
 
-st.subheader("Reference dates")
 st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
 st.write(f"Today: **{today.date()}**")
-st.caption("All calculations use transaction data up to the latest transaction date.")
 col1, col2 = st.columns([1.2, 1.2])
 with col1:
-    st.subheader(f"This month")
+    st.subheader(f"{last_date.strftime('%B %Y')}")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     
     # Determine color and delta text based on spending vs limit
@@ -354,11 +349,8 @@ fig2.update_layout(
 st.plotly_chart(fig2, use_container_width=True)
 
 st.markdown("---")
-st.caption("Notes: Expenses are inferred from negative amounts in the transaction data. If you have multiple currencies, edit FX rates in the sidebar.")
 
-# Always show top counterparties for current month + last 3 months
-st.markdown("---")
-st.header("Top counterparties")
+st.header("Top Expenses")
 
 # Build the 4 monthly periods (reference = last_date from CSV)
 last_period = last_date.to_period("M")
@@ -410,10 +402,10 @@ for i, period in enumerate(periods):
         
         if display_data:
             table_df = pd.DataFrame(display_data)
-            # Show scrollable table with max 5 visible rows
+            # Show scrollable table with max 8 visible rows
             st.dataframe(
                 table_df, 
-                height=200,  # Fixed height to show ~5 rows with scroll
+                height=320,  # Fixed height to show ~8 rows with scroll
                 use_container_width=True,
                 hide_index=True
             )
