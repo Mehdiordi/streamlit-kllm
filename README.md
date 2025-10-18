@@ -12,7 +12,13 @@ A simple Streamlit app showing the GDP of different countries in the world.
    $ pip install -r requirements.txt
    ```
 
-2. Run the app
+2. Update data:
+
+```
+./update_files.sh
+```
+
+3. Run the app
 
    ```
    $ streamlit run streamlit_app.py --server.port 1111 --server.address 0.0.0.0
