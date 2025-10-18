@@ -222,6 +222,9 @@ spent_month_to_last_date = df.loc[(df["date"] >= month_start) & (df["date"] <= m
 # For weekly: use cumulative monthly spending vs accumulated weekly limits
 spent_week_cumulative = spent_month_to_last_date  # This is cumulative from month start
 
+# Calculate current week spending only (for display purposes)
+spent_current_week_only = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end), "expense_dkk"].sum()
+
 # Also show "till today" totals (if CSV contains entries up to today, it'll be same)
 spent_month_to_today = df.loc[(df["date"] >= today.replace(day=1)) & (df["date"] <= today), "expense_dkk"].sum() if today <= last_date else spent_month_to_last_date
 # For cumulative weekly calculation, use month-to-date spending vs today's accumulated limit
@@ -246,17 +249,47 @@ col1, col2 = st.columns([1.2, 1.2])
 with col1:
     st.subheader(f"This month")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
-    delta = f"{'-' if month_remaining>=0 else '+'}{abs(month_remaining):,.0f} DKK"
-    st.metric(label="Spent", value=f"{spent_month_to_last_date:,.0f} DKK", delta=delta)
+    
+    # Fix delta sign: positive when under budget (good), negative when over budget (bad)
+    if month_remaining >= 0:
+        delta = f"+{month_remaining:,.0f} DKK remaining"
+    else:
+        delta = f"{month_remaining:,.0f} DKK over"
+    
+    # Determine color based on spending vs limit
+    monthly_usage_pct = spent_month_to_last_date / monthly_limit if monthly_limit > 0 else 0
+    if monthly_usage_pct >= 1.0:  # Over limit
+        delta_color = "inverse"  # Red
+    elif monthly_usage_pct >= 0.9:  # Within 10% of limit
+        delta_color = "off"  # Orange/neutral
+    else:  # Safe zone
+        delta_color = "normal"  # Green
+    
+    st.metric(label="Spent", value=f"{spent_month_to_last_date:,.0f} DKK", delta=delta, delta_color=delta_color)
     st.progress(min(spent_month_to_last_date / monthly_limit if monthly_limit>0 else 0, 1.0))
 
 with col2:
     st.subheader(f"Cumulative weekly")
     labelw = f"{month_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')} (Week {weeks_in_month})"
-    deltaw = f"{'-' if week_remaining>=0 else '+'}{abs(week_remaining):,.0f} DKK"
-    st.metric(label="Spent", value=f"{spent_week_cumulative:,.0f} DKK", delta=deltaw)
+    
+    # Fix delta sign: positive when under budget (good), negative when over budget (bad)
+    if week_remaining >= 0:
+        deltaw = f"+{week_remaining:,.0f} DKK remaining"
+    else:
+        deltaw = f"{week_remaining:,.0f} DKK over"
+    
+    # Determine color based on cumulative weekly spending vs accumulated limit
+    weekly_usage_pct = spent_week_cumulative / accumulated_weekly_limit if accumulated_weekly_limit > 0 else 0
+    if weekly_usage_pct >= 1.0:  # Over limit
+        delta_color_weekly = "inverse"  # Red
+    elif weekly_usage_pct >= 0.9:  # Within 10% of limit
+        delta_color_weekly = "off"  # Orange/neutral
+    else:  # Safe zone
+        delta_color_weekly = "normal"  # Green
+    
+    st.metric(label="Spent", value=f"{spent_current_week_only:,.0f} DKK", delta=deltaw, delta_color=delta_color_weekly)
     st.progress(min(spent_week_cumulative / accumulated_weekly_limit if accumulated_weekly_limit>0 else 0, 1.0))
-    st.caption(f"Limit: {accumulated_weekly_limit:,.0f} DKK ({weeks_in_month} weeks × {weekly_limit:,.0f} DKK)")
+    st.caption(f"Cumulative: {spent_week_cumulative:,.0f} DKK / {accumulated_weekly_limit:,.0f} DKK ({weeks_in_month} weeks × {weekly_limit:,.0f} DKK)")
 
 st.markdown("---")
 
@@ -349,18 +382,6 @@ fig2 = px.line(daily_df, x="date", y="cumulative_spent", title=f"Cumulative spen
 fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
 fig2.update_layout(height=360, margin=dict(t=40,l=40,r=40,b=20))
 st.plotly_chart(fig2, use_container_width=True)
-
-# Helpful textual summary
-st.markdown("### Summary")
-if month_remaining >= 0:
-    st.success(f"You are under the monthly limit by {month_remaining:,.0f} DKK (through {last_date.strftime('%B %d, %Y')}).")
-else:
-    st.error(f"You are OVER the monthly limit by {abs(month_remaining):,.0f} DKK (through {last_date.strftime('%B %d, %Y')}).")
-
-if week_remaining >= 0:
-    st.success(f"You are under the cumulative weekly limit by {week_remaining:,.0f} DKK (Week {weeks_in_month}: {accumulated_weekly_limit:,.0f} DKK total budget).")
-else:
-    st.error(f"You are OVER the cumulative weekly limit by {abs(week_remaining):,.0f} DKK (Week {weeks_in_month}: {accumulated_weekly_limit:,.0f} DKK total budget).")
 
 st.markdown("---")
 st.caption("Notes: Expenses are inferred from negative amounts in the transaction data. If you have multiple currencies, edit FX rates in the sidebar.")
