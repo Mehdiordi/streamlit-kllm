@@ -374,12 +374,20 @@ for i, period in enumerate(periods):
     display_label = period.strftime("%b %Y")  # e.g. "Oct 2025"
     with col:
         # Calculate totals for this month in DKK
-        total_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+        gross_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
         
         # Separate income (USD positive) from refunds (other positive currencies)
         positive_df = month_df[month_df["amount_dkk"] > 0]
-        actual_income_dkk = positive_df[positive_df["currency"] == "USD"]["amount_dkk"].sum()
+        
+        # Calculate USD income (both DKK converted and original USD amounts)
+        usd_transactions = positive_df[positive_df["currency"] == "USD"]
+        actual_income_dkk = usd_transactions["amount_dkk"].sum()
+        actual_income_usd = usd_transactions["amount"].sum()  # Original USD amount
+        
         refund_dkk = positive_df[positive_df["currency"] != "USD"]["amount_dkk"].sum()
+        
+        # Calculate net expenses (gross expenses minus refunds for this month)
+        net_expense_dkk = gross_expense_dkk - refund_dkk
         
         # Count total items (unique counterparties)
         total_counterparties = month_df["counterparty"].nunique()
@@ -390,7 +398,13 @@ for i, period in enumerate(periods):
             continue
         
         # Display totals and item count with emojis only (compact for mobile)
-        st.caption(f"💸 {total_expense_dkk:,.0f} DKK | 💰 {actual_income_dkk:,.0f} DKK | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
+        # Show original USD amount in brackets for income
+        if actual_income_usd > 0:
+            income_display = f"💰 {actual_income_dkk:,.0f} DKK [${actual_income_usd:,.0f}]"
+        else:
+            income_display = f"💰 {actual_income_dkk:,.0f} DKK"
+            
+        st.caption(f"💸 {net_expense_dkk:,.0f} DKK | {income_display} | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
 
         # Summarize expense counterparties only (remove income from table)
         counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
