@@ -319,9 +319,38 @@ daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().rei
 daily_df = pd.DataFrame({"date": month_days, "cumulative_spent": daily_sum.values})
 daily_df["limit_progress"] = [(i+1)/len(month_days) * monthly_limit for i in range(len(month_days))]
 
-fig2 = px.line(daily_df, x="date", y="cumulative_spent", title=f"Cumulative spending this month (through {last_date.strftime('%B %d, %Y')})", labels={"cumulative_spent":"Cumulative spent (DKK)"})
-fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
-fig2.update_layout(height=360, margin=dict(t=40,l=40,r=40,b=20))
+# Create responsive chart with better mobile layout
+fig2 = px.line(daily_df, x="date", y="cumulative_spent", 
+               title=f"Cumulative spending (through {last_date.strftime('%b %d')})", 
+               labels={"cumulative_spent":"Spent (DKK)", "date": ""})
+fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", 
+                name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
+
+# Responsive layout settings
+fig2.update_layout(
+    height=300,  # Slightly shorter for mobile
+    margin=dict(t=50, l=20, r=20, b=20),  # Tighter margins
+    title=dict(x=0.5, font=dict(size=14)),  # Center title with smaller font
+    legend=dict(
+        orientation="h",  # Horizontal legend
+        yanchor="bottom",
+        y=1.02,
+        xanchor="center",
+        x=0.5,
+        font=dict(size=10)  # Smaller legend font
+    ),
+    xaxis=dict(
+        title="",  # Remove x-axis title to save space
+        tickfont=dict(size=10),
+        tickangle=0  # Keep dates horizontal
+    ),
+    yaxis=dict(
+        title="DKK",  # Short y-axis title
+        title_font=dict(size=12),
+        tickfont=dict(size=10)
+    )
+)
+
 st.plotly_chart(fig2, use_container_width=True)
 
 st.markdown("---")
