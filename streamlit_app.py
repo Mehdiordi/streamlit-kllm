@@ -349,8 +349,8 @@ for i, period in enumerate(periods):
         total_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
         total_income_dkk = month_df[month_df["amount_dkk"] > 0]["amount_dkk"].sum()
         
-        # Count expense items (unique counterparties with expenses)
-        expense_counterparties = month_df[month_df["amount_dkk"] < 0]["counterparty"].nunique()
+        # Count total items (unique counterparties)
+        total_counterparties = month_df["counterparty"].nunique()
         
         st.subheader(display_label)
         if month_df.empty:
@@ -358,7 +358,7 @@ for i, period in enumerate(periods):
             continue
         
         # Display totals and item count at the top
-        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK ({expense_counterparties} items) | 💰 Income: {total_income_dkk:,.0f} DKK")
+        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK | 💰 Income: {total_income_dkk:,.0f} DKK | 📊 Items: {total_counterparties}")
 
         # Summarize expense counterparties only (remove income from table)
         counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
