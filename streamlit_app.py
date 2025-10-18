@@ -75,7 +75,7 @@ else:
         else:
             # fallback to S3 (expects secrets set: AWS_*, S3_BUCKET, S3_KEY)
             s3_bucket = st.secrets.get("S3_BUCKET")
-            s3_key = st.secrets.get("S3_KEY")
+            s3_key = st.secrets.get("S3_KEY", "data/home_expenses.csv")
             aws_id = st.secrets.get("AWS_ACCESS_KEY_ID")
             aws_secret = st.secrets.get("AWS_SECRET_ACCESS_KEY")
             aws_region = st.secrets.get("AWS_REGION", None)
