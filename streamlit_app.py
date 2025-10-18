@@ -24,7 +24,7 @@ weekly_default = float(monthly_limit) / 4.33
 weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=round(weekly_default, 2), step=100.0, format="%.2f")
 
 st.sidebar.markdown("---")
-st.sidebar.write("FX rates (used to convert to DKK if your CSV has a currency column)")
+st.sidebar.write("FX rates (used to convert to DKK if your data has a currency column)")
 fx_dkk = st.sidebar.number_input("EUR → DKK", value=7.46, format="%.4f")
 fx_usd = st.sidebar.number_input("USD → DKK", value=6.85, format="%.4f")
 FX_MAP = {"DKK": 1.0, "EUR": float(fx_dkk), "USD": float(fx_usd)}
@@ -70,7 +70,7 @@ if use_uploader and uploaded_file is not None:
         df_raw = load_csv_from_buffer(uploaded_file)
         data_source = f"Uploaded: {uploaded_file.name}"
     except Exception as e:
-        st.error(f"Failed to read uploaded CSV: {e}")
+        st.error(f"Failed to read uploaded file: {e}")
         st.stop()
 else:
     # If S3 is configured, try S3 first (so deployed app reads S3 by default)
@@ -95,10 +95,10 @@ else:
                 df_raw = load_csv_from_buffer(csv_path)
                 data_source = f"Local path: {csv_path}"
         except Exception as e:
-            st.error(f"Failed to read local CSV: {e}")
+            st.error(f"Failed to read local file: {e}")
             st.stop()
     if df_raw is None:
-        st.error("No valid CSV found: upload one, set local path, or configure S3 secrets (S3_BUCKET/S3_KEY).")
+        st.error("No transaction data found: upload a file, set local path, or configure S3 secrets (S3_BUCKET/S3_KEY).")
         st.stop()
 
 st.caption(data_source)
@@ -178,50 +178,59 @@ month_end = last_date  # up to last_date present in CSV
 week_start = (last_date - pd.Timedelta(days=int(last_date.weekday()))).normalize()
 week_end = last_date
 
+# Calculate how many weeks have passed in the current month
+# Week calculation: cumulative spending from month start vs accumulated weekly limits
+weeks_in_month = ((last_date - month_start).days // 7) + 1  # How many weeks into the month we are
+accumulated_weekly_limit = weekly_limit * weeks_in_month
+
 # Totals
 spent_month_to_last_date = df.loc[(df["date"] >= month_start) & (df["date"] <= month_end), "expense_dkk"].sum()
-spent_week_to_last_date = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end), "expense_dkk"].sum()
+# For weekly: use cumulative monthly spending vs accumulated weekly limits
+spent_week_cumulative = spent_month_to_last_date  # This is cumulative from month start
 
 # Also show "till today" totals (if CSV contains entries up to today, it'll be same)
 spent_month_to_today = df.loc[(df["date"] >= today.replace(day=1)) & (df["date"] <= today), "expense_dkk"].sum() if today <= last_date else spent_month_to_last_date
-spent_week_to_today = df.loc[(df["date"] >= (today - pd.Timedelta(days=int(today.weekday())))) & (df["date"] <= today), "expense_dkk"].sum() if today <= last_date else spent_week_to_last_date
+# For cumulative weekly calculation, use month-to-date spending vs today's accumulated limit
+weeks_in_month_today = ((today - today.replace(day=1)).days // 7) + 1 if today <= last_date else weeks_in_month
+accumulated_weekly_limit_today = weekly_limit * weeks_in_month_today
+spent_week_to_today = spent_month_to_today  # Cumulative from month start
 
 # Comparison computations
 month_remaining = monthly_limit - spent_month_to_last_date
-week_remaining = weekly_limit - spent_week_to_last_date
+week_remaining = accumulated_weekly_limit - spent_week_cumulative
 
 month_pct = min(max(spent_month_to_last_date / monthly_limit, 0), 2) if monthly_limit > 0 else 0
-week_pct = min(max(spent_week_to_last_date / weekly_limit, 0), 2) if weekly_limit > 0 else 0
+week_pct = min(max(spent_week_cumulative / accumulated_weekly_limit, 0), 2) if accumulated_weekly_limit > 0 else 0
 
 # Layout: top metrics
-col1, col2, col3 = st.columns([1.2, 1.2, 1])
+
+st.subheader("Reference dates")
+st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
+st.write(f"Today: **{today.date()}**")
+st.caption("All calculations use transaction data up to the latest transaction date.")
+col1, col2 = st.columns([1.2, 1.2])
 with col1:
-    st.subheader("This month (to last CSV date)")
+    st.subheader(f"This month")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     delta = f"{'-' if month_remaining>=0 else '+'}{abs(month_remaining):,.0f} DKK"
     st.metric(label="Spent", value=f"{spent_month_to_last_date:,.0f} DKK", delta=delta)
     st.progress(min(spent_month_to_last_date / monthly_limit if monthly_limit>0 else 0, 1.0))
 
 with col2:
-    st.subheader("This week (to last CSV date)")
-    labelw = f"{week_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')}"
+    st.subheader(f"Cumulative weekly")
+    labelw = f"{month_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')} (Week {weeks_in_month})"
     deltaw = f"{'-' if week_remaining>=0 else '+'}{abs(week_remaining):,.0f} DKK"
-    st.metric(label="Spent", value=f"{spent_week_to_last_date:,.0f} DKK", delta=deltaw)
-    st.progress(min(spent_week_to_last_date / weekly_limit if weekly_limit>0 else 0, 1.0))
-
-with col3:
-    st.subheader("Reference dates")
-    st.write(f"Last date in CSV: **{last_date.date()}**")
-    st.write(f"Today: **{today.date()}**")
-    st.caption("All calculations use CSV data up to the last date present in the file.")
+    st.metric(label="Spent", value=f"{spent_week_cumulative:,.0f} DKK", delta=deltaw)
+    st.progress(min(spent_week_cumulative / accumulated_weekly_limit if accumulated_weekly_limit>0 else 0, 1.0))
+    st.caption(f"Limit: {accumulated_weekly_limit:,.0f} DKK ({weeks_in_month} weeks × {weekly_limit:,.0f} DKK)")
 
 st.markdown("---")
 
 # Simple comparison bars (Plotly) — improved: limit line + spent (green + red overage)
 comp_df = pd.DataFrame({
-    "scope": ["Month (to last CSV date)", "Week (to last CSV date)"],
-    "spent": [spent_month_to_last_date, spent_week_to_last_date],
-    "limit": [monthly_limit, weekly_limit]
+    "scope": [f"Month (through {last_date.strftime('%b %d')})", f"Cumulative Weekly (Week {weeks_in_month})"],
+    "spent": [spent_month_to_last_date, spent_week_cumulative],
+    "limit": [monthly_limit, accumulated_weekly_limit]
 })
 
 # split spent into "within limit" and "over limit" parts
@@ -269,7 +278,7 @@ fig.add_trace(go.Bar(
 ))
 
 fig.update_layout(
-    title_text="Spent vs Limit (to last CSV date)",
+    title_text=f"Spent vs Limit (through {last_date.strftime('%B %d, %Y')})",
     barmode="overlay",
     height=300,
     margin=dict(t=40, l=40, r=40, b=20),
@@ -302,7 +311,7 @@ daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().rei
 daily_df = pd.DataFrame({"date": month_days, "cumulative_spent": daily_sum.values})
 daily_df["limit_progress"] = [(i+1)/len(month_days) * monthly_limit for i in range(len(month_days))]
 
-fig2 = px.line(daily_df, x="date", y="cumulative_spent", title="Cumulative spending this month (up to last CSV date)", labels={"cumulative_spent":"Cumulative spent (DKK)"})
+fig2 = px.line(daily_df, x="date", y="cumulative_spent", title=f"Cumulative spending this month (through {last_date.strftime('%B %d, %Y')})", labels={"cumulative_spent":"Cumulative spent (DKK)"})
 fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
 fig2.update_layout(height=360, margin=dict(t=40,l=40,r=40,b=20))
 st.plotly_chart(fig2, use_container_width=True)
@@ -310,21 +319,21 @@ st.plotly_chart(fig2, use_container_width=True)
 # Helpful textual summary
 st.markdown("### Summary")
 if month_remaining >= 0:
-    st.success(f"You are under the monthly limit by {month_remaining:,.0f} DKK (based on data up to {last_date.date()}).")
+    st.success(f"You are under the monthly limit by {month_remaining:,.0f} DKK (through {last_date.strftime('%B %d, %Y')}).")
 else:
-    st.error(f"You are OVER the monthly limit by {abs(month_remaining):,.0f} DKK (based on data up to {last_date.date()}).")
+    st.error(f"You are OVER the monthly limit by {abs(month_remaining):,.0f} DKK (through {last_date.strftime('%B %d, %Y')}).")
 
 if week_remaining >= 0:
-    st.success(f"You are under the weekly limit by {week_remaining:,.0f} DKK (week starting {week_start.date()}).")
+    st.success(f"You are under the cumulative weekly limit by {week_remaining:,.0f} DKK (Week {weeks_in_month}: {accumulated_weekly_limit:,.0f} DKK total budget).")
 else:
-    st.error(f"You are OVER the weekly limit by {abs(week_remaining):,.0f} DKK (week starting {week_start.date()}).")
+    st.error(f"You are OVER the cumulative weekly limit by {abs(week_remaining):,.0f} DKK (Week {weeks_in_month}: {accumulated_weekly_limit:,.0f} DKK total budget).")
 
 st.markdown("---")
-st.caption("Notes: Expenses are inferred from negative amounts in the CSV. If you have multiple currencies, edit FX rates in the sidebar.")
+st.caption("Notes: Expenses are inferred from negative amounts in the transaction data. If you have multiple currencies, edit FX rates in the sidebar.")
 
 # Always show top counterparties for current month + last 3 months
 st.markdown("---")
-st.header("Top counterparties — Current month + last 3 months")
+st.header("Top counterparties")
 
 # Build the 4 monthly periods (reference = last_date from CSV)
 last_period = last_date.to_period("M")
