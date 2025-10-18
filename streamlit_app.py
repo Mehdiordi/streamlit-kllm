@@ -250,126 +250,67 @@ with col1:
     st.subheader(f"This month")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     
-    # Fix delta sign: positive when under budget (good), negative when over budget (bad)
-    if month_remaining >= 0:
-        delta = f"+{month_remaining:,.0f} DKK remaining"
-    else:
-        delta = f"{month_remaining:,.0f} DKK over"
-    
-    # Determine color based on spending vs limit
+    # Determine color and delta text based on spending vs limit
     monthly_usage_pct = spent_month_to_last_date / monthly_limit if monthly_limit > 0 else 0
+    
     if monthly_usage_pct >= 1.0:  # Over limit
         delta_color = "inverse"  # Red
+        progress_color = "red"
+        delta = f"{abs(month_remaining):,.0f} DKK over"  # Use positive number with "inverse" to show red
     elif monthly_usage_pct >= 0.9:  # Within 10% of limit
         delta_color = "off"  # Orange/neutral
+        progress_color = "orange"
+        delta = f"{month_remaining:,.0f} DKK remaining"
     else:  # Safe zone
         delta_color = "normal"  # Green
+        progress_color = "green"
+        delta = f"{month_remaining:,.0f} DKK remaining"
     
     st.metric(label="Spent", value=f"{spent_month_to_last_date:,.0f} DKK", delta=delta, delta_color=delta_color)
-    st.progress(min(spent_month_to_last_date / monthly_limit if monthly_limit>0 else 0, 1.0))
+    
+    # Colored progress bar
+    progress_value = min(monthly_usage_pct, 1.0)
+    if progress_color == "red":
+        st.markdown(f'<div style="background: linear-gradient(90deg, #ff4b4b 0%, #ff4b4b {progress_value*100:.1f}%, #333 {progress_value*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
+    elif progress_color == "orange":
+        st.markdown(f'<div style="background: linear-gradient(90deg, #ffaa00 0%, #ffaa00 {progress_value*100:.1f}%, #333 {progress_value*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div style="background: linear-gradient(90deg, #00cc88 0%, #00cc88 {progress_value*100:.1f}%, #333 {progress_value*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
 
 with col2:
     st.subheader(f"Cumulative weekly")
     labelw = f"{month_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')} (Week {weeks_in_month})"
     
-    # Fix delta sign: positive when under budget (good), negative when over budget (bad)
-    if week_remaining >= 0:
-        deltaw = f"+{week_remaining:,.0f} DKK remaining"
-    else:
-        deltaw = f"{week_remaining:,.0f} DKK over"
-    
-    # Determine color based on cumulative weekly spending vs accumulated limit
+    # Determine color and delta text based on cumulative weekly spending vs accumulated limit
     weekly_usage_pct = spent_week_cumulative / accumulated_weekly_limit if accumulated_weekly_limit > 0 else 0
+    
     if weekly_usage_pct >= 1.0:  # Over limit
         delta_color_weekly = "inverse"  # Red
+        progress_color_weekly = "red"
+        deltaw = f"{abs(week_remaining):,.0f} DKK over"  # Use positive number with "inverse" to show red
     elif weekly_usage_pct >= 0.9:  # Within 10% of limit
         delta_color_weekly = "off"  # Orange/neutral
+        progress_color_weekly = "orange"
+        deltaw = f"{week_remaining:,.0f} DKK remaining"
     else:  # Safe zone
         delta_color_weekly = "normal"  # Green
+        progress_color_weekly = "green"
+        deltaw = f"{week_remaining:,.0f} DKK remaining"
     
     st.metric(label="Spent", value=f"{spent_current_week_only:,.0f} DKK", delta=deltaw, delta_color=delta_color_weekly)
-    st.progress(min(spent_week_cumulative / accumulated_weekly_limit if accumulated_weekly_limit>0 else 0, 1.0))
+    
+    # Colored progress bar for weekly
+    progress_value_weekly = min(weekly_usage_pct, 1.0)
+    if progress_color_weekly == "red":
+        st.markdown(f'<div style="background: linear-gradient(90deg, #ff4b4b 0%, #ff4b4b {progress_value_weekly*100:.1f}%, #333 {progress_value_weekly*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
+    elif progress_color_weekly == "orange":
+        st.markdown(f'<div style="background: linear-gradient(90deg, #ffaa00 0%, #ffaa00 {progress_value_weekly*100:.1f}%, #333 {progress_value_weekly*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div style="background: linear-gradient(90deg, #00cc88 0%, #00cc88 {progress_value_weekly*100:.1f}%, #333 {progress_value_weekly*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
+    
     st.caption(f"Cumulative: {spent_week_cumulative:,.0f} DKK / {accumulated_weekly_limit:,.0f} DKK ({weeks_in_month} weeks × {weekly_limit:,.0f} DKK)")
 
 st.markdown("---")
-
-# Simple comparison bars (Plotly) — improved: limit line + spent (green + red overage)
-comp_df = pd.DataFrame({
-    "scope": [f"Month (through {last_date.strftime('%b %d')})", f"Cumulative Weekly (Week {weeks_in_month})"],
-    "spent": [spent_month_to_last_date, spent_week_cumulative],
-    "limit": [monthly_limit, accumulated_weekly_limit]
-})
-
-# split spent into "within limit" and "over limit" parts
-spent_up = [min(s, l) for s, l in zip(comp_df["spent"], comp_df["limit"])]
-spent_over = [max(s - l, 0) for s, l in zip(comp_df["spent"], comp_df["limit"])]
-
-fig = go.Figure()
-
-# background "limit" thin bar (light/blurred)
-fig.add_trace(go.Bar(
-    y=comp_df["scope"],
-    x=comp_df["limit"],
-    orientation="h",
-    name="Limit",
-    marker=dict(color="rgba(120,120,120,0.20)"),
-    showlegend=False,
-    hovertemplate="Limit: %{x:,.0f} DKK<extra></extra>"
-))
-
-# spent within the limit (green)
-fig.add_trace(go.Bar(
-    y=comp_df["scope"],
-    x=spent_up,
-    orientation="h",
-    name="Spent (≤ limit)",
-    marker=dict(color="#2E8B57"),
-    text=[f"{v:,.0f} DKK" if v>0 else "" for v in comp_df["spent"]],
-    textposition="inside",
-    insidetextanchor="middle",
-    hovertemplate="Spent (within): %{x:,.0f} DKK<extra></extra>"
-))
-
-# over-limit portion (red) - we place it starting at the end of the within-limit segment using 'base'
-fig.add_trace(go.Bar(
-    y=comp_df["scope"],
-    x=spent_over,
-    orientation="h",
-    name="Over limit",
-    marker=dict(color="#D9534F"),
-    base=spent_up,
-    text=["" if v==0 else f"{v:,.0f} DKK" for v in spent_over],
-    textposition="inside",
-    insidetextanchor="middle",
-    hovertemplate="Overage: %{x:,.0f} DKK<extra></extra>"
-))
-
-fig.update_layout(
-    title_text=f"Spent vs Limit (through {last_date.strftime('%B %d, %Y')})",
-    barmode="overlay",
-    height=300,
-    margin=dict(t=40, l=40, r=40, b=20),
-    xaxis_title="DKK",
-    yaxis=dict(autorange="reversed")  # keep Month on top
-)
-
-# show also numeric totals in the subtitle area by annotation (optional)
-for i, row in comp_df.iterrows():
-    tot = row["spent"]
-    lim = row["limit"]
-    status = "OK" if tot <= lim else "OVER"
-    color = "#2E8B57" if tot <= lim else "#D9534F"
-    fig.add_annotation(
-        x=tot,
-        y=row["scope"],
-        xanchor="left",
-        yanchor="middle",
-        text=f"{tot:,.0f} DKK ({status})",
-        showarrow=False,
-        font=dict(color=color, size=12)
-    )
-
-st.plotly_chart(fig, use_container_width=True)
 
 # Daily cumulative chart for current month (up to last_date)
 month_days = pd.date_range(start=month_start, end=month_end, freq='D')
