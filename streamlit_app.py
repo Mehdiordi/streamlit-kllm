@@ -215,13 +215,30 @@ week_end = last_date
 weeks_in_month = ((last_date - month_start).days // 7) + 1  # How many weeks into the month we are
 accumulated_weekly_limit = weekly_limit * weeks_in_month
 
-# Totals
-spent_month_to_last_date = df.loc[(df["date"] >= month_start) & (df["date"] <= month_end), "expense_dkk"].sum()
+# Totals - calculate net expenses (gross expenses minus refunds)
+# Use same period logic as monthly tables for consistency
+current_period = last_date.to_period("M")
+period_mask = df["date"].dt.to_period("M") == current_period
+current_month_df = df.loc[period_mask]
+
+gross_month_expenses = current_month_df[current_month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+
+# Calculate refunds for current month (non-USD positive transactions)
+current_month_positive = current_month_df[current_month_df["amount_dkk"] > 0]
+current_month_refunds = current_month_positive[current_month_positive["currency"] != "USD"]["amount_dkk"].sum()
+
+# Net spending = gross expenses - refunds
+spent_month_to_last_date = gross_month_expenses - current_month_refunds
+
 # For weekly: use cumulative monthly spending vs accumulated weekly limits
 spent_week_cumulative = spent_month_to_last_date  # This is cumulative from month start
 
-# Calculate current week spending only (for display purposes)
-spent_current_week_only = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end), "expense_dkk"].sum()
+# Calculate current week spending only (for display purposes) - also net
+current_week_df = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end)]
+gross_week_expenses = current_week_df[current_week_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+current_week_positive = current_week_df[current_week_df["amount_dkk"] > 0]
+current_week_refunds = current_week_positive[current_week_positive["currency"] != "USD"]["amount_dkk"].sum()
+spent_current_week_only = gross_week_expenses - current_week_refunds
 
 # Also show "till today" totals (if CSV contains entries up to today, it'll be same)
 spent_month_to_today = df.loc[(df["date"] >= today.replace(day=1)) & (df["date"] <= today), "expense_dkk"].sum() if today <= last_date else spent_month_to_last_date
@@ -247,9 +264,11 @@ else:
     # No time, show date only
     st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
 st.write(f"Today: **{today.date()}**")
+st.markdown(f"----")
 col1, col2 = st.columns([1.2, 1.2])
 with col1:
     st.subheader(f"{last_date.strftime('%B %Y')}")
+    st.write(f"All refunds for this month is subtracted from expenses.")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     
     # Determine color and delta text based on spending vs limit
