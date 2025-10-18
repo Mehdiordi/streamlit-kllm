@@ -375,7 +375,11 @@ for i, period in enumerate(periods):
     with col:
         # Calculate totals for this month in DKK
         total_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
-        total_income_dkk = month_df[month_df["amount_dkk"] > 0]["amount_dkk"].sum()
+        
+        # Separate income (USD positive) from refunds (other positive currencies)
+        positive_df = month_df[month_df["amount_dkk"] > 0]
+        actual_income_dkk = positive_df[positive_df["currency"] == "USD"]["amount_dkk"].sum()
+        refund_dkk = positive_df[positive_df["currency"] != "USD"]["amount_dkk"].sum()
         
         # Count total items (unique counterparties)
         total_counterparties = month_df["counterparty"].nunique()
@@ -385,8 +389,8 @@ for i, period in enumerate(periods):
             st.write("No data")
             continue
         
-        # Display totals and item count at the top
-        st.caption(f"💸 Expenses: {total_expense_dkk:,.0f} DKK | 💰 Income: {total_income_dkk:,.0f} DKK | 📊 Items: {total_counterparties}")
+        # Display totals and item count with emojis only (compact for mobile)
+        st.caption(f"💸 {total_expense_dkk:,.0f} DKK | 💰 {actual_income_dkk:,.0f} DKK | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
 
         # Summarize expense counterparties only (remove income from table)
         counterparty_summary = month_df.groupby("counterparty")["amount_dkk"].sum().sort_values()
