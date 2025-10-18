@@ -198,6 +198,7 @@ def categorize_counterparty(counterparty):
 df["category"] = df["counterparty"].apply(categorize_counterparty)
 
 # Reference dates
+last_date_with_time = df["date"].max()  # Keep original time
 last_date = df["date"].max().normalize()
 today = pd.Timestamp.now().normalize()
 
@@ -238,7 +239,13 @@ week_pct = min(max(spent_week_cumulative / accumulated_weekly_limit, 0), 2) if a
 
 # Layout: top metrics
 
-st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
+# Format latest transaction with time if available
+if last_date_with_time.time() != pd.Timestamp("00:00:00").time():
+    # Time exists, show it
+    st.write(f"Latest transaction: **{last_date_with_time.strftime('%B %d, %Y at %H:%M')}**")
+else:
+    # No time, show date only
+    st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
 st.write(f"Today: **{today.date()}**")
 col1, col2 = st.columns([1.2, 1.2])
 with col1:
@@ -393,11 +400,17 @@ for i, period in enumerate(periods):
         # Add expenses only (negative amounts, but show as positive)
         for cp, amount in cp_expenses.items():
             category = month_df[month_df["counterparty"] == cp]["category"].iloc[0] if cp in month_df["counterparty"].values else "no-category"
+            # Get the latest transaction date for this counterparty in this month
+            cp_transactions = month_df[month_df["counterparty"] == cp]
+            latest_transaction = cp_transactions["date"].max()
+            # Format as MM-DD HH:MM
+            datetime_str = latest_transaction.strftime("%m-%d %H:%M")
+            
             display_data.append({
                 "Counterparty": cp, 
                 "Amount (DKK)": int(amount), 
                 "Category": category,
-                "Type": "Expense"
+                "Datetime": datetime_str
             })
         
         if display_data:
@@ -441,12 +454,19 @@ for i, period in enumerate(periods):
                             text="Amount (DKK)",
                             color_discrete_sequence=["#D9534F"],  # Red for expenses
                         )
-                        fig_small.update_traces(texttemplate="%{text:,}", textposition="inside")
+                        fig_small.update_traces(
+                            texttemplate="%{text:,}", 
+                            textposition="inside",
+                            textfont=dict(size=12)  # Bigger text for mobile
+                        )
                         fig_small.update_layout(
                             height=220,
                             margin=dict(t=10, l=10, r=10, b=10),
                             xaxis_title="DKK",
-                            yaxis=dict(autorange="reversed"),  # keep largest on top
+                            yaxis=dict(
+                                autorange="reversed",  # keep largest on top
+                                title=""  # Remove y-axis label
+                            ),
                             showlegend=False
                         )
                         st.plotly_chart(fig_small, use_container_width=True)
