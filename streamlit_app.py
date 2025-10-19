@@ -457,7 +457,7 @@ for i, period in enumerate(periods):
             # Show scrollable table with max 8 visible rows
             st.dataframe(
                 table_df, 
-                height=320,  # Fixed height to show ~8 rows with scroll
+                height=340,  # Fixed height to show ~8 rows with scroll
                 use_container_width=True,
                 hide_index=True
             )
@@ -496,10 +496,10 @@ for i, period in enumerate(periods):
                         fig_small.update_traces(
                             texttemplate="%{text:,}", 
                             textposition="inside",
-                            textfont=dict(size=12)  # Bigger text for mobile
+                            textfont=dict(size=20, color="white", family="Arial Black")
                         )
                         fig_small.update_layout(
-                            height=220,
+                            height=230,
                             margin=dict(t=10, l=10, r=10, b=10),
                             xaxis_title="DKK",
                             yaxis=dict(
