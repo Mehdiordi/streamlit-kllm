@@ -29,8 +29,8 @@ weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, valu
 
 st.sidebar.markdown("---")
 st.sidebar.write("FX rates (used to convert to DKK if your data has a currency column)")
-fx_dkk = st.sidebar.number_input("EUR → DKK", value=7.46, format="%.4f")
-fx_usd = st.sidebar.number_input("USD → DKK", value=6.85, format="%.4f")
+fx_dkk = st.sidebar.number_input("EUR → DKK", value=7.44, format="%.4f")
+fx_usd = st.sidebar.number_input("USD → DKK", value=6.35, format="%.4f")
 FX_MAP = {"DKK": 1.0, "EUR": float(fx_dkk), "USD": float(fx_usd)}
 
 # -----------------------------------------------------------------------------
