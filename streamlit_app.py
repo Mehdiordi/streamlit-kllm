@@ -383,138 +383,148 @@ st.markdown("---")
 
 st.header("Top Expenses")
 
-# Build the 4 monthly periods (reference = last_date from CSV)
+# Build the 8 monthly periods (reference = last_date from CSV)
 last_period = last_date.to_period("M")
-periods = [last_period - i for i in range(0, 4)]  # last_period, last-1, last-2, last-3
-# Show newest -> oldest (left -> right): Oct, Sep, Aug, Jul
-# periods is already in the correct order: [Oct, Sep, Aug, Jul]
+periods = [last_period - i for i in range(0, 8)]  # last_period, last-1, last-2, ..., last-7
+# Show newest -> oldest (left -> right): Oct, Sep, Aug, Jul, Jun, May, Apr, Mar
+# periods is already in the correct order
 
-cols = st.columns(4)
-for i, period in enumerate(periods):
-    col = cols[i]
-    # Filter rows for this period
-    mask = df["date"].dt.to_period("M") == period
-    month_df = df.loc[mask].copy()
-    display_label = period.strftime("%b %Y")  # e.g. "Oct 2025"
-    with col:
-        # Calculate totals for this month in DKK
-        gross_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+# Split into two rows of 4 columns each
+for row in range(2):
+    if row == 1:  # Add separator between rows
+        st.markdown("---")
+    cols = st.columns(4)
+    for col_idx in range(4):
+        period_idx = row * 4 + col_idx
+        if period_idx >= len(periods):
+            break
         
-        # Separate income (USD positive) from refunds (other positive currencies)
-        positive_df = month_df[month_df["amount_dkk"] > 0]
+        period = periods[period_idx]
+        col = cols[col_idx]
         
-        # Calculate USD income (both DKK converted and original USD amounts)
-        usd_transactions = positive_df[positive_df["currency"] == "USD"]
-        actual_income_dkk = usd_transactions["amount_dkk"].sum()
-        actual_income_usd = usd_transactions["amount"].sum()  # Original USD amount
-        
-        refund_dkk = positive_df[positive_df["currency"] != "USD"]["amount_dkk"].sum()
-        
-        # Calculate net expenses (gross expenses minus refunds for this month)
-        net_expense_dkk = gross_expense_dkk - refund_dkk
-        
-        # Count total items (unique counterparties)
-        total_counterparties = month_df["counterparty"].nunique()
-        
-        st.subheader(display_label)
-        if month_df.empty:
-            st.write("No data")
-            continue
-        
-        # Display totals and item count with emojis only (compact for mobile)
-        # Show original USD amount in brackets for income
-        if actual_income_usd > 0:
-            income_display = f"💰 {actual_income_dkk:,.0f} DKK [${actual_income_usd:,.0f}]"
-        else:
-            income_display = f"💰 {actual_income_dkk:,.0f} DKK"
+        # Filter rows for this period
+        mask = df["date"].dt.to_period("M") == period
+        month_df = df.loc[mask].copy()
+        display_label = period.strftime("%b %Y")  # e.g. "Oct 2025"
+        with col:
+            # Calculate totals for this month in DKK
+            gross_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
             
-        st.caption(f"💸 {net_expense_dkk:,.0f} DKK | {income_display} | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
-
-        # Show individual expense transactions (remove income from table)
-        expense_transactions = month_df[month_df["amount_dkk"] < 0].copy()
-        expense_transactions = expense_transactions.sort_values("amount_dkk")  # Sort by amount (most negative first)
-        
-        # Create display data with individual transactions
-        display_data = []
-        
-        # Add individual expense transactions (show as positive amounts)
-        for _, transaction in expense_transactions.iterrows():
-            amount_dkk = abs(transaction["amount_dkk"])
-            counterparty = transaction["counterparty"]
-            category = transaction["category"]
-            # Format as MM-DD HH:MM
-            datetime_str = transaction["date"].strftime("%m-%d %H:%M")
+            # Separate income (USD positive) from refunds (other positive currencies)
+            positive_df = month_df[month_df["amount_dkk"] > 0]
             
-            display_data.append({
-                "Counterparty": counterparty, 
-                "Amount (DKK)": int(amount_dkk), 
-                "Datetime": datetime_str,
-                "Category": category
-            })
-        
-        if display_data:
-            table_df = pd.DataFrame(display_data)
-            # Show scrollable table with max 8 visible rows
-            st.dataframe(
-                table_df, 
-                height=340,  # Fixed height to show ~8 rows with scroll
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.write("No transactions")
-            continue
+            # Calculate USD income (both DKK converted and original USD amounts)
+            usd_transactions = positive_df[positive_df["currency"] == "USD"]
+            actual_income_dkk = usd_transactions["amount_dkk"].sum()
+            actual_income_usd = usd_transactions["amount"].sum()  # Original USD amount
+            
+            refund_dkk = positive_df[positive_df["currency"] != "USD"]["amount_dkk"].sum()
+            
+            # Calculate net expenses (gross expenses minus refunds for this month)
+            net_expense_dkk = gross_expense_dkk - refund_dkk
+            
+            # Count total items (unique counterparties)
+            total_counterparties = month_df["counterparty"].nunique()
+            
+            st.subheader(display_label)
+            if month_df.empty:
+                st.write("No data")
+                continue
+            
+            # Display totals and item count with emojis only (compact for mobile)
+            # Show original USD amount in brackets for income
+            if actual_income_usd > 0:
+                income_display = f"💰 {actual_income_dkk:,.0f} DKK [${actual_income_usd:,.0f}]"
+            else:
+                income_display = f"💰 {actual_income_dkk:,.0f} DKK"
+                
+            st.caption(f"💸 {net_expense_dkk:,.0f} DKK | {income_display} | ♻️ {refund_dkk:,.0f} DKK | 📊 {total_counterparties}")
 
-        # Mini horizontal bar chart by categories (show top expense categories only)
-        try:
-            if not month_df.empty:
-                # Group expenses by category for the current month
-                expense_month_df = month_df[month_df["amount_dkk"] < 0].copy()
-                if not expense_month_df.empty:
-                    category_expenses = (
-                        expense_month_df.groupby("category")["amount_dkk"]
-                        .sum()
-                        .abs()  # Convert to positive
-                        .sort_values(ascending=False)
-                        .head(8)  # Top 8 categories
-                    )
-                    
-                    if not category_expenses.empty:
-                        category_plot_df = pd.DataFrame({
-                            "Category": category_expenses.index,
-                            "Amount (DKK)": category_expenses.values.astype(int)
-                        })
+            # Show individual expense transactions (remove income from table)
+            expense_transactions = month_df[month_df["amount_dkk"] < 0].copy()
+            expense_transactions = expense_transactions.sort_values("amount_dkk")  # Sort by amount (most negative first)
+            
+            # Create display data with individual transactions
+            display_data = []
+            
+            # Add individual expense transactions (show as positive amounts)
+            for _, transaction in expense_transactions.iterrows():
+                amount_dkk = abs(transaction["amount_dkk"])
+                counterparty = transaction["counterparty"]
+                category = transaction["category"]
+                # Format as MM-DD HH:MM
+                datetime_str = transaction["date"].strftime("%m-%d %H:%M")
+                
+                display_data.append({
+                    "Counterparty": counterparty, 
+                    "Amount (DKK)": int(amount_dkk), 
+                    "Datetime": datetime_str,
+                    "Category": category
+                })
+            
+            if display_data:
+                table_df = pd.DataFrame(display_data)
+                # Show scrollable table with max 8 visible rows
+                st.dataframe(
+                    table_df, 
+                    height=340,  # Fixed height to show ~8 rows with scroll
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.write("No transactions")
+                continue
+
+            # Mini horizontal bar chart by categories (show top expense categories only)
+            try:
+                if not month_df.empty:
+                    # Group expenses by category for the current month
+                    expense_month_df = month_df[month_df["amount_dkk"] < 0].copy()
+                    if not expense_month_df.empty:
+                        category_expenses = (
+                            expense_month_df.groupby("category")["amount_dkk"]
+                            .sum()
+                            .abs()  # Convert to positive
+                            .sort_values(ascending=False)
+                            .head(8)  # Top 8 categories
+                        )
                         
-                        fig_small = px.bar(
-                            category_plot_df,
-                            x="Amount (DKK)",
-                            y="Category",
-                            orientation="h",
-                            text="Amount (DKK)",
-                            color_discrete_sequence=["#D9534F"],  # Red for expenses
-                        )
-                        fig_small.update_traces(
-                            texttemplate="%{text:,}", 
-                            textposition="inside",
-                            textfont=dict(size=20, color="white", family="Arial Black")
-                        )
-                        fig_small.update_layout(
-                            height=230,
-                            margin=dict(t=10, l=10, r=10, b=10),
-                            xaxis_title="DKK",
-                            yaxis=dict(
-                                autorange="reversed",  # keep largest on top
-                                title=""  # Remove y-axis label
-                            ),
-                            showlegend=False,
-                            # Disable interactivity for mobile
-                            dragmode=False
-                        )
-                        # Disable hover and interactions
-                        fig_small.update_traces(hoverinfo='skip', hovertemplate=None)
-                        st.plotly_chart(fig_small, use_container_width=True)
-        except Exception:
-            # If plotting fails, skip gracefully
-            pass
+                        if not category_expenses.empty:
+                            category_plot_df = pd.DataFrame({
+                                "Category": category_expenses.index,
+                                "Amount (DKK)": category_expenses.values.astype(int)
+                            })
+                            
+                            fig_small = px.bar(
+                                category_plot_df,
+                                x="Amount (DKK)",
+                                y="Category",
+                                orientation="h",
+                                text="Amount (DKK)",
+                                color_discrete_sequence=["#D9534F"],  # Red for expenses
+                            )
+                            fig_small.update_traces(
+                                texttemplate="%{text:,}", 
+                                textposition="inside",
+                                textfont=dict(size=20, color="white", family="Arial Black")
+                            )
+                            fig_small.update_layout(
+                                height=230,
+                                margin=dict(t=10, l=10, r=10, b=10),
+                                xaxis_title="DKK",
+                                yaxis=dict(
+                                    autorange="reversed",  # keep largest on top
+                                    title=""  # Remove y-axis label
+                                ),
+                                showlegend=False,
+                                # Disable interactivity for mobile
+                                dragmode=False
+                            )
+                            # Disable hover and interactions
+                            fig_small.update_traces(hoverinfo='skip', hovertemplate=None)
+                            st.plotly_chart(fig_small, use_container_width=True)
+            except Exception:
+                # If plotting fails, skip gracefully
+                pass
 
 # End of file
