@@ -299,7 +299,8 @@ with col1:
         st.markdown(f'<div style="background: linear-gradient(90deg, #00cc88 0%, #00cc88 {progress_value*100:.1f}%, #333 {progress_value*100:.1f}%, #333 100%); height: 8px; border-radius: 4px;"></div>', unsafe_allow_html=True)
 
 with col2:
-    st.subheader(f"Cumulative weekly")
+    st.markdown("##### Cumulative weekly")
+    st.write("Spending cumulates from month start vs weekly budget.")
     labelw = f"{month_start.strftime('%Y-%m-%d')} → {week_end.strftime('%Y-%m-%d')} (Week {weeks_in_month})"
     
     # Determine color and delta text based on cumulative weekly spending vs accumulated limit
@@ -333,49 +334,101 @@ with col2:
 
 st.markdown("---")
 
-# Daily cumulative chart for current month (up to last_date)
-month_days = pd.date_range(start=month_start, end=month_end, freq='D')
-daily = df.loc[(df["date"] >= month_start) & (df["date"] <= month_end)].copy()
-daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().reindex(month_days, fill_value=0).cumsum()
-daily_df = pd.DataFrame({"date": month_days, "cumulative_spent": daily_sum.values})
-daily_df["limit_progress"] = [(i+1)/len(month_days) * monthly_limit for i in range(len(month_days))]
+# Daily cumulative chart for current month (full month from 1st to last day)
+# Get the full month range from 1st to last day of the month
+month_first_day = last_date.replace(day=1)
+month_last_day = (month_first_day + pd.DateOffset(months=1) - pd.DateOffset(days=1)).normalize()
+month_days = pd.date_range(start=month_first_day, end=month_last_day, freq='D')
 
-# Create responsive chart with better mobile layout
-fig2 = px.line(daily_df, x="date", y="cumulative_spent", 
-               title=f"Cumulative spending (through {last_date.strftime('%b %d')})", 
-               labels={"cumulative_spent":"Spent (DKK)", "date": ""})
-fig2.add_scatter(x=daily_df["date"], y=daily_df["limit_progress"], mode="lines", 
-                name="Pro-rated limit", line=dict(dash="dash", color="#FFA500"))
+daily = df.loc[(df["date"] >= month_first_day) & (df["date"] <= month_last_day)].copy()
+daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().reindex(month_days, fill_value=0).cumsum()
+
+# Create separate dataframes for spending (only up to last_date) and limit (full month)
+spending_days = pd.date_range(start=month_first_day, end=last_date, freq='D')
+spending_sum = daily_sum.reindex(spending_days)
+spending_df = pd.DataFrame({"date": spending_days, "cumulative_spent": spending_sum.values})
+
+limit_df = pd.DataFrame({"date": month_days, "limit_progress": [(i+1)/len(month_days) * monthly_limit for i in range(len(month_days))]})
+
+# Create responsive chart with conditional coloring
+fig2 = go.Figure()
+
+# Add pro-rated limit line first (so it appears behind)
+fig2.add_trace(go.Scatter(
+    x=limit_df["date"], 
+    y=limit_df["limit_progress"], 
+    mode="lines",
+    line=dict(dash="dash", color="#FFA500", width=2),
+    name="Pro-rated limit",
+    showlegend=False
+))
+
+# Calculate corresponding limit values for spending dates to determine color
+if not spending_df.empty:
+    spending_with_limit = spending_df.copy()
+    spending_with_limit["days_from_start"] = (spending_with_limit["date"] - month_first_day).dt.days + 1
+    spending_with_limit["corresponding_limit"] = spending_with_limit["days_from_start"] / len(month_days) * monthly_limit
+    
+    # Create segments based on whether spending is above or below limit
+    for i in range(len(spending_with_limit)):
+        current_row = spending_with_limit.iloc[i]
+        
+        # Determine color based on spending vs limit
+        is_over_limit = current_row["cumulative_spent"] > current_row["corresponding_limit"]
+        color = "#ff4b4b" if is_over_limit else "#1f77b4"  # Red if over, blue if under
+        
+        # Add line segment from previous point to current point
+        if i > 0:
+            prev_row = spending_with_limit.iloc[i-1]
+            fig2.add_trace(go.Scatter(
+                x=[prev_row["date"], current_row["date"]], 
+                y=[prev_row["cumulative_spent"], current_row["cumulative_spent"]],
+                mode="lines",
+                line=dict(color=color, width=3),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+        elif i == 0:
+            # First point - add as a single point line
+            fig2.add_trace(go.Scatter(
+                x=[current_row["date"]], 
+                y=[current_row["cumulative_spent"]],
+                mode="lines",
+                line=dict(color=color, width=3),
+                showlegend=False,
+                hoverinfo='skip'
+            ))
+
+    # Add green dot at the end of the spending line
+    last_spending_point = spending_df.iloc[-1]
+    fig2.add_trace(go.Scatter(
+        x=[last_spending_point["date"]], 
+        y=[last_spending_point["cumulative_spent"]], 
+        mode="markers", 
+        marker=dict(color="green", size=8),
+        name="Current position",
+        showlegend=False,
+        hoverinfo='skip'
+    ))
 
 # Responsive layout settings - disable interactivity for mobile
 fig2.update_layout(
     height=300,  # Slightly shorter for mobile
     margin=dict(t=50, l=20, r=20, b=20),  # Tighter margins
-    title=dict(x=0.5, font=dict(size=14)),  # Center title with smaller font
-    legend=dict(
-        orientation="h",  # Horizontal legend
-        yanchor="bottom",
-        y=1.02,
-        xanchor="center",
-        x=0.5,
-        font=dict(size=10)  # Smaller legend font
-    ),
+    title=dict(text="Cumulative spending (DKK)", x=0.5, font=dict(size=14)),  # Center title with smaller font
+    showlegend=False,  # Remove legend
     xaxis=dict(
         title="",  # Remove x-axis title to save space
         tickfont=dict(size=10),
         tickangle=0  # Keep dates horizontal
     ),
     yaxis=dict(
-        title="DKK",  # Short y-axis title
-        title_font=dict(size=12),
+        title="",  # Remove y-axis title
         tickfont=dict(size=10)
     ),
     # Disable interactivity for mobile-friendly experience
     dragmode=False
 )
-
-# Disable hover and interactions
-fig2.update_traces(hoverinfo='skip', hovertemplate=None)
 
 st.plotly_chart(fig2, use_container_width=True)
 
@@ -389,13 +442,21 @@ periods = [last_period - i for i in range(0, 8)]  # last_period, last-1, last-2,
 # Show newest -> oldest (left -> right): Oct, Sep, Aug, Jul, Jun, May, Apr, Mar
 # periods is already in the correct order
 
-# Split into two rows of 4 columns each
-for row in range(2):
-    if row == 1:  # Add separator between rows
+# Split into rows of 3 columns each (3+3+2 for 8 months)
+for row in range(3):
+    if row > 0:  # Add separator between rows
         st.markdown("---")
-    cols = st.columns(4)
-    for col_idx in range(4):
-        period_idx = row * 4 + col_idx
+    
+    # Determine columns for this row
+    if row < 2:  # First two rows have 3 columns
+        cols = st.columns(3)
+        cols_in_row = 3
+    else:  # Last row has 2 columns
+        cols = st.columns(2)
+        cols_in_row = 2
+    
+    for col_idx in range(cols_in_row):
+        period_idx = row * 3 + col_idx
         if period_idx >= len(periods):
             break
         
