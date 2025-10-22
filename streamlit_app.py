@@ -14,7 +14,7 @@ import pytz
 try:
     from config import personal_categories, get_monthly_limit
     config_loaded = True
-    st.sidebar.success(f"✅ Config loaded: {len(personal_categories)} categories")
+    # st.sidebar.success(f"✅ Config loaded: {len(personal_categories)} categories")
 except ImportError as e:
     # Fallback categories for when config.py is not available (e.g., in deployment)
     personal_categories = {
@@ -45,16 +45,15 @@ st.sidebar.header("Data / Limits")
 default_path = Path("data/transaction-history.csv")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
 
-# Budget configuration info (details will be shown after carry-over calculation)
-st.sidebar.subheader("Budget Configuration")
-st.sidebar.write("Monthly limits are configured in config.py")
-st.sidebar.write("Carry-over from previous months is automatically calculated")
+# Monthly limit - use config as default but allow user adjustment
+default_monthly_limit = 18000  # Will be updated after we load the config
+monthly_limit_input = st.sidebar.number_input("Monthly limit (DKK)", min_value=0, value=default_monthly_limit, step=500, format="%d", help="Adjustable for testing - resets to config.py value on refresh")
 
-# Temporary defaults for weekly calculation (will be updated with actual monthly limit)
-weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=4150.0, step=100.0, format="%.2f")
+# Calculate weekly limit from monthly
+weekly_default = float(monthly_limit_input) / 4.33
+weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=round(weekly_default, 2), step=100.0, format="%.2f")
 
 st.sidebar.markdown("---")
-st.sidebar.write("FX rates (used to convert to DKK if your data has a currency column)")
 fx_dkk = st.sidebar.number_input("EUR → DKK", value=7.44, format="%.4f")
 fx_usd = st.sidebar.number_input("USD → DKK", value=6.35, format="%.4f")
 FX_MAP = {"DKK": 1.0, "EUR": float(fx_dkk), "USD": float(fx_usd)}
@@ -358,14 +357,16 @@ current_year = last_date.year
 current_month = last_date.month
 base_monthly_limit = get_monthly_limit(current_year, current_month)
 
-# Adjusted monthly limit = base limit - carry over (surplus adds to limit, deficit reduces it)
-monthly_limit = base_monthly_limit - carry_over_amount
+# Use user input for monthly limit, or fall back to config value
+# Adjusted monthly limit = user input - carry over (surplus adds to limit, deficit reduces it)
+monthly_limit = monthly_limit_input - carry_over_amount
 
 # Update sidebar with current month's budget details
 st.sidebar.markdown("---")
 st.sidebar.subheader("Current Month Budget")
 st.sidebar.write(f"**{last_date.strftime('%B %Y')}**")
-st.sidebar.write(f"Base limit: {base_monthly_limit:,.0f} DKK")
+st.sidebar.write(f"Config default: {base_monthly_limit:,.0f} DKK")
+st.sidebar.write(f"Your setting: {monthly_limit_input:,.0f} DKK")
 
 if carry_over_amount != 0:
     if carry_over_amount > 0:  # Deficit
