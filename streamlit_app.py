@@ -256,9 +256,19 @@ current_month_df = df.loc[period_mask]
 
 gross_month_expenses = current_month_df[current_month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
 
-# Calculate refunds for current month (non-USD positive transactions)
+# Calculate refunds for current month (non-USD positive transactions, excluding cashback)
 current_month_positive = current_month_df[current_month_df["amount_dkk"] > 0]
-current_month_refunds = current_month_positive[current_month_positive["currency"] != "USD"]["amount_dkk"].sum()
+# Exclude cashback from refunds (cashback should be treated as income)
+# Check for cashback in multiple columns (ID, Reference, counterparty)
+cashback_mask = (
+    current_month_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+    current_month_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+    current_month_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
+)
+current_month_refunds_df = current_month_positive[
+    (current_month_positive["currency"] != "USD") & (~cashback_mask)
+]
+current_month_refunds = current_month_refunds_df["amount_dkk"].sum()
 
 # Net spending = gross expenses - refunds
 spent_month_to_last_date = gross_month_expenses - current_month_refunds
@@ -270,7 +280,17 @@ spent_week_cumulative = spent_month_to_last_date  # This is cumulative from mont
 current_week_df = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end)]
 gross_week_expenses = current_week_df[current_week_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
 current_week_positive = current_week_df[current_week_df["amount_dkk"] > 0]
-current_week_refunds = current_week_positive[current_week_positive["currency"] != "USD"]["amount_dkk"].sum()
+# Exclude cashback from refunds (cashback should be treated as income)
+# Check for cashback in multiple columns (ID, Reference, counterparty)
+cashback_mask_week = (
+    current_week_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+    current_week_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+    current_week_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
+)
+current_week_refunds_df = current_week_positive[
+    (current_week_positive["currency"] != "USD") & (~cashback_mask_week)
+]
+current_week_refunds = current_week_refunds_df["amount_dkk"].sum()
 spent_current_week_only = gross_week_expenses - current_week_refunds
 
 # Also show "till today" totals (if CSV contains entries up to today, it'll be same)
@@ -301,7 +321,7 @@ st.markdown(f"----")
 col1, col2 = st.columns([1.2, 1.2])
 with col1:
     st.subheader(f"{last_date.strftime('%B %Y')}")
-    st.write(f"All refunds for this month is subtracted from expenses.")
+    st.write(f"All refunds for this month are subtracted from expenses. Cashback is treated as income.")
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     
     # Determine color and delta text based on spending vs limit
@@ -505,15 +525,30 @@ for row in range(3):
             # Calculate totals for this month in DKK
             gross_expense_dkk = month_df[month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
             
-            # Separate income (USD positive) from refunds (other positive currencies)
+            # Separate income (USD positive + Cashback) from refunds (other positive currencies)
             positive_df = month_df[month_df["amount_dkk"] > 0]
             
             # Calculate USD income (both DKK converted and original USD amounts)
             usd_transactions = positive_df[positive_df["currency"] == "USD"]
-            actual_income_dkk = usd_transactions["amount_dkk"].sum()
             actual_income_usd = usd_transactions["amount"].sum()  # Original USD amount
             
-            refund_dkk = positive_df[positive_df["currency"] != "USD"]["amount_dkk"].sum()
+            # Calculate cashback income (any currency)
+            # Check for cashbook in multiple columns (ID, Reference, counterparty)
+            cashback_mask_display = (
+                positive_df.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+                positive_df.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+                positive_df["counterparty"].str.contains("CASHBACK", case=False, na=False)
+            )
+            cashback_transactions = positive_df[cashback_mask_display]
+            cashback_income_dkk = cashback_transactions["amount_dkk"].sum()
+            
+            # Total income = USD transactions + Cashback
+            actual_income_dkk = usd_transactions["amount_dkk"].sum() + cashback_income_dkk
+            
+            # Refunds = positive transactions excluding USD and Cashback
+            refund_dkk = positive_df[
+                (positive_df["currency"] != "USD") & (~cashback_mask_display)
+            ]["amount_dkk"].sum()
             
             # Calculate net expenses (gross expenses minus refunds for this month)
             net_expense_dkk = gross_expense_dkk - refund_dkk
@@ -527,9 +562,16 @@ for row in range(3):
                 continue
             
             # Display totals and item count with emojis only (compact for mobile)
-            # Show original USD amount in brackets for income
+            # Show breakdown of income sources (USD salary + cashback)
+            income_parts = []
             if actual_income_usd > 0:
-                income_display = f"💰 {actual_income_dkk:,.0f} DKK [${actual_income_usd:,.0f}]"
+                income_parts.append(f"${actual_income_usd:,.0f} USD")
+            if cashback_income_dkk > 0:
+                income_parts.append(f"{cashback_income_dkk:,.0f} DKK cashback")
+            
+            if income_parts:
+                income_breakdown = " + ".join(income_parts)
+                income_display = f"💰 {actual_income_dkk:,.0f} DKK [{income_breakdown}]"
             else:
                 income_display = f"💰 {actual_income_dkk:,.0f} DKK"
                 
