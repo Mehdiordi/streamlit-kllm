@@ -10,11 +10,13 @@ import io
 from botocore.exceptions import ClientError
 import pytz
 
-# Import personal categories for expense categorization
+# Import personal categories and monthly limits for expense categorization
 try:
-    from config import personal_categories
+    from config import personal_categories, get_monthly_limit
 except ImportError:
     personal_categories = {}  # Fallback if config.py doesn't exist
+    def get_monthly_limit(year, month):
+        return 18000  # Default fallback
 
 st.set_page_config(page_title=" Budget Tracker", layout="wide")
 st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
@@ -23,10 +25,13 @@ st.sidebar.header("Data / Limits")
 default_path = Path("data/transaction-history.csv")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
 
-monthly_limit = st.sidebar.number_input("Monthly limit (DKK)", min_value=0, value=18000, step=500, format="%d")
-# default weekly ~ month / 4.33
-weekly_default = float(monthly_limit) / 4.33
-weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=round(weekly_default, 2), step=100.0, format="%.2f")
+# Budget configuration info (details will be shown after carry-over calculation)
+st.sidebar.subheader("Budget Configuration")
+st.sidebar.write("Monthly limits are configured in config.py")
+st.sidebar.write("Carry-over from previous months is automatically calculated")
+
+# Temporary defaults for weekly calculation (will be updated with actual monthly limit)
+weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=4150.0, step=100.0, format="%.2f")
 
 st.sidebar.markdown("---")
 st.sidebar.write("FX rates (used to convert to DKK if your data has a currency column)")
@@ -248,6 +253,109 @@ week_end = last_date
 weeks_in_month = ((last_date - month_start).days // 7) + 1  # How many weeks into the month we are
 accumulated_weekly_limit = weekly_limit * weeks_in_month
 
+# Budget carry-over calculation (starting from October 2025)
+def calculate_budget_carryover(df, current_date):
+    """Calculate budget surplus/deficit carry-over from October 2025 onwards"""
+    carry_over_start = pd.Timestamp('2025-10-01', tz=denmark_tz)
+    current_period = current_date.to_period('M')
+    
+    if current_date < carry_over_start:
+        return 0, []  # No carry-over before October 2025
+    
+    carry_over_amount = 0
+    carry_over_details = []
+    
+    # Calculate carry-over from October 2025 to current month (exclusive)
+    start_period = carry_over_start.to_period('M')  # 2025-10
+    
+    for period in pd.period_range(start_period, current_period, freq='M'):
+        if period >= current_period:
+            break  # Don't include current month
+            
+        # Get spending for this period
+        period_mask = df["date"].dt.to_period("M") == period
+        period_df = df.loc[period_mask]
+        
+        if period_df.empty:
+            continue  # Skip months with no data
+            
+        # Calculate net spending for this month (same logic as main calculation)
+        gross_expenses = period_df[period_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1
+        period_positive = period_df[period_df["amount_dkk"] > 0]
+        
+        # Exclude cashback from refunds
+        cashback_mask = (
+            period_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+            period_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+            period_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
+        )
+        period_refunds = period_positive[
+            (period_positive["currency"] != "USD") & (~cashback_mask)
+        ]["amount_dkk"].sum()
+        
+        net_spending = gross_expenses - period_refunds
+        
+        # Get the budget limit for this month
+        year = period.year
+        month = period.month
+        budget_limit = get_monthly_limit(year, month)
+        
+        # Calculate surplus (negative) or deficit (positive)
+        month_result = net_spending - budget_limit
+        carry_over_amount += month_result
+        
+        carry_over_details.append({
+            'period': period,
+            'spending': net_spending,
+            'limit': budget_limit,
+            'result': month_result
+        })
+    
+    return carry_over_amount, carry_over_details
+
+# Calculate budget carry-over and adjusted monthly limit
+carry_over_amount, carry_over_details = calculate_budget_carryover(df, last_date)
+
+# Get base monthly limit for current month from config
+current_year = last_date.year
+current_month = last_date.month
+base_monthly_limit = get_monthly_limit(current_year, current_month)
+
+# Adjusted monthly limit = base limit - carry over (surplus adds to limit, deficit reduces it)
+monthly_limit = base_monthly_limit - carry_over_amount
+
+# Update sidebar with current month's budget details
+st.sidebar.markdown("---")
+st.sidebar.subheader("Current Month Budget")
+st.sidebar.write(f"**{last_date.strftime('%B %Y')}**")
+st.sidebar.write(f"Base limit: {base_monthly_limit:,.0f} DKK")
+
+if carry_over_amount != 0:
+    if carry_over_amount > 0:  # Deficit
+        st.sidebar.write(f"❌ Carry-over deficit: -{carry_over_amount:,.0f} DKK")
+        st.sidebar.write(f"🎯 **Adjusted limit: {monthly_limit:,.0f} DKK**")
+    else:  # Surplus
+        st.sidebar.write(f"✅ Carry-over surplus: +{abs(carry_over_amount):,.0f} DKK") 
+        st.sidebar.write(f"🎯 **Adjusted limit: {monthly_limit:,.0f} DKK**")
+else:
+    st.sidebar.write("ℹ️ No carry-over (first month or no data)")
+    st.sidebar.write(f"🎯 **Current limit: {monthly_limit:,.0f} DKK**")
+
+# Show carry-over details if available
+if len(carry_over_details) > 0:
+    with st.sidebar.expander("📊 Carry-over Details"):
+        for detail in carry_over_details[-3:]:  # Show last 3 months
+            period_str = detail['period'].strftime('%b %Y')
+            spending = detail['spending']
+            limit = detail['limit']
+            result = detail['result']
+            if result > 0:
+                st.write(f"**{period_str}**: {spending:,.0f}/{limit:,.0f} DKK (❌ +{result:,.0f})")
+            else:
+                st.write(f"**{period_str}**: {spending:,.0f}/{limit:,.0f} DKK (✅ {result:,.0f})")
+        if len(carry_over_details) > 3:
+            st.write(f"... and {len(carry_over_details)-3} earlier months")
+
 # Totals - calculate net expenses (gross expenses minus refunds)
 # Use same period logic as monthly tables for consistency
 current_period = last_date.to_period("M")
@@ -322,6 +430,17 @@ col1, col2 = st.columns([1.2, 1.2])
 with col1:
     st.subheader(f"{last_date.strftime('%B %Y')}")
     st.write(f"All refunds for this month are subtracted from expenses. Cashback is treated as income.")
+    
+    # Show budget information with carry-over details
+    if carry_over_amount != 0:
+        if carry_over_amount > 0:  # Deficit from previous months
+            carry_over_text = f"⚠️ Deficit from prev months: -{carry_over_amount:,.0f} DKK"
+        else:  # Surplus from previous months
+            carry_over_text = f"✅ Surplus from prev months: +{abs(carry_over_amount):,.0f} DKK"
+        st.caption(f"Base limit: {base_monthly_limit:,.0f} DKK | {carry_over_text}")
+    else:
+        st.caption(f"Monthly limit: {base_monthly_limit:,.0f} DKK (no carry-over)")
+    
     label = f"{month_start.strftime('%Y-%m-%d')} → {month_end.strftime('%Y-%m-%d')}"
     
     # Determine color and delta text based on spending vs limit
