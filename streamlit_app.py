@@ -13,10 +13,30 @@ import pytz
 # Import personal categories and monthly limits for expense categorization
 try:
     from config import personal_categories, get_monthly_limit
-except ImportError:
-    personal_categories = {}  # Fallback if config.py doesn't exist
+    config_loaded = True
+    st.sidebar.success(f"✅ Config loaded: {len(personal_categories)} categories")
+except ImportError as e:
+    # Fallback categories for when config.py is not available (e.g., in deployment)
+    personal_categories = {
+        # Essential categories for basic functionality
+        'Netto': 'Groceries', 'Kvickly': 'Groceries', 'nemlig.com': 'Groceries',
+        'Coop 365': 'Groceries', 'REMA 1000': 'Groceries', 'føtex': 'Groceries',
+        'Circle K': 'Fuel', 'Shell': 'Fuel', 'Q8': 'Fuel', 'Uno-X': 'Fuel',
+        'Amazon': 'Amazon', 'Amazon Web Services': 'Amazon',
+        'Boozt.com': 'Clothes', 'Mango': 'Clothes', 'Adidas': 'Clothes',
+        'McDonald\'s': 'Eat Out', 'Lagkagehuset': 'Eat Out', '7-Eleven': 'Eat Out',
+        'Roedovre Skoejte Isho': 'Ice Hockey', 'Holdsport': 'Ice Hockey',
+        'IKEA': 'Home Maintenance', 'Bauhaus': 'Home Maintenance',
+    }
+    config_loaded = False
+    st.sidebar.warning(f"⚠️ Using fallback config: {len(personal_categories)} basic categories")
+    
+    # Monthly limits fallback
     def get_monthly_limit(year, month):
-        return 18000  # Default fallback
+        # Basic fallback limits
+        if month == 12 or month == 1:  # December or January
+            return 21000
+        return 18000
 
 st.set_page_config(page_title=" Budget Tracker", layout="wide")
 st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
@@ -233,6 +253,23 @@ def categorize_counterparty(counterparty):
 
 # Apply categorization
 df["category"] = df["counterparty"].apply(categorize_counterparty)
+
+# Debug info for categorization
+if not config_loaded:
+    st.sidebar.warning("⚠️ Using fallback categorization")
+    st.sidebar.caption("To fix: Ensure config.py is deployed and accessible")
+else:
+    unique_categories = df["category"].value_counts()
+    no_category_count = unique_categories.get("no-category", 0)
+    total_transactions = len(df)
+    categorized_pct = ((total_transactions - no_category_count) / total_transactions * 100) if total_transactions > 0 else 0
+    st.sidebar.info(f"📊 Categorized: {categorized_pct:.1f}% of transactions")
+
+# Show category breakdown in sidebar for debugging
+with st.sidebar.expander("🏷️ Category Breakdown"):
+    category_counts = df["category"].value_counts().head(10)
+    for category, count in category_counts.items():
+        st.write(f"**{category}**: {count} transactions")
 
 # Reference dates
 last_date_with_time = df["date"].max()  # Keep original time (now in Denmark timezone)
