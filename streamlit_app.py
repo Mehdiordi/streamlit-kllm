@@ -780,7 +780,7 @@ for row in range(3):
                             .sum()
                             .abs()  # Convert to positive
                             .sort_values(ascending=False)
-                            .head(8)  # Top 8 categories
+                            .head(18)  # Top 18 categories
                         )
                         
                         if not category_expenses.empty:
@@ -803,7 +803,7 @@ for row in range(3):
                                 textfont=dict(size=20, color="white", family="Arial Black")
                             )
                             fig_small.update_layout(
-                                height=230,
+                                height=260,
                                 margin=dict(t=10, l=10, r=10, b=10),
                                 xaxis_title="DKK",
                                 yaxis=dict(
