@@ -92,12 +92,12 @@ DEST="s3://${BUCKET}/${KEY}"
 echo "Uploading '$SOURCE' → $DEST"
 # Use server-side encryption and set content-type, and overwrite by default.
 # Note: remove --sse if not desired.
-aws s3 cp "$SOURCE" "$DEST" "${AWS_EXTRA[@]}" --acl bucket-owner-full-control --content-type "text/csv" --sse AES256
+aws s3 cp "$SOURCE" "$DEST" ${AWS_EXTRA[@]+"${AWS_EXTRA[@]}"} --acl bucket-owner-full-control --content-type "text/csv" --sse AES256
 
 echo "Upload finished. Verifying..."
-if aws s3 ls "$DEST" "${AWS_EXTRA[@]}" >/dev/null 2>&1; then
+if aws s3 ls "$DEST" ${AWS_EXTRA[@]+"${AWS_EXTRA[@]}"} >/dev/null 2>&1; then
   echo "OK: $DEST exists in S3"
-  aws s3 ls "$DEST" "${AWS_EXTRA[@]}"
+  aws s3 ls "$DEST" ${AWS_EXTRA[@]+"${AWS_EXTRA[@]}"}
   echo "Done."
 else
   err "Upload failed or object not found after upload."

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import boto3
 import io
 from botocore.exceptions import ClientError
+import pytz
 
 # Import personal categories for expense categorization
 try:
@@ -44,16 +45,32 @@ from botocore.exceptions import ClientError
 def load_csv_from_buffer(buf):
     return pd.read_csv(buf)
 
-def load_csv_from_s3(bucket: str, key: str, aws_access_key_id=None, aws_secret_access_key=None, region_name=None):
-    session = boto3.session.Session(
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-        region_name=region_name,
-    )
-    s3 = session.client("s3")
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    body = obj["Body"].read()
-    return pd.read_csv(io.BytesIO(body))
+def load_csv_from_s3(bucket: str, key: str, aws_access_key_id=None, aws_secret_access_key=None, region_name=None, profile_name=None):
+    try:
+        if aws_access_key_id and aws_secret_access_key:
+            # Use explicit credentials
+            session = boto3.session.Session(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=region_name,
+            )
+        elif profile_name:
+            # Use specific profile
+            session = boto3.session.Session(
+                profile_name=profile_name,
+                region_name=region_name,
+            )
+        else:
+            # Use default credentials but with explicit region
+            session = boto3.session.Session(region_name=region_name)
+        
+        s3 = session.client("s3")
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        body = obj["Body"].read()
+        return pd.read_csv(io.BytesIO(body))
+    except Exception as e:
+        # Re-raise with more context
+        raise Exception(f"S3 read failed: {str(e)}")
 
 # Determine data source (uploader prioritized, then S3 if configured, then local path)
 use_uploader = st.sidebar.checkbox("Upload CSV", value=False)
@@ -80,12 +97,16 @@ else:
     # If S3 is configured, try S3 first (so deployed app reads S3 by default)
     if s3_bucket and s3_key:
         try:
+            # Use profile if no explicit credentials are provided
+            profile_name = "streamlit-reader" if not (aws_id and aws_secret) else None
+            
             df_raw = load_csv_from_s3(
                 bucket=s3_bucket,
                 key=s3_key,
                 aws_access_key_id=aws_id,
                 aws_secret_access_key=aws_secret,
                 region_name=aws_region,
+                profile_name=profile_name,
             )
             data_source = f"S3: s3://{s3_bucket}/{s3_key}"
         except Exception as e:
@@ -127,6 +148,17 @@ if date_col is None or amt_col is None:
 
 # Parse date column
 df_raw[date_col] = pd.to_datetime(df_raw[date_col], errors="coerce")
+
+# Set up Denmark timezone
+denmark_tz = pytz.timezone('Europe/Copenhagen')
+
+# Convert dates to Denmark timezone if they have timezone info, or localize if naive
+if df_raw[date_col].dt.tz is not None:
+    # Dates have timezone info, convert to Denmark time
+    df_raw[date_col] = df_raw[date_col].dt.tz_convert(denmark_tz)
+else:
+    # Dates are naive (no timezone), assume UTC and convert to Denmark time
+    df_raw[date_col] = df_raw[date_col].dt.tz_localize('UTC').dt.tz_convert(denmark_tz)
 # unified amount: positive income, negative expense (best effort using direction if present)
 def unified_amount(row):
     try:
@@ -198,9 +230,10 @@ def categorize_counterparty(counterparty):
 df["category"] = df["counterparty"].apply(categorize_counterparty)
 
 # Reference dates
-last_date_with_time = df["date"].max()  # Keep original time
+last_date_with_time = df["date"].max()  # Keep original time (now in Denmark timezone)
 last_date = df["date"].max().normalize()
-today = pd.Timestamp.now().normalize()
+# Get current time in Denmark timezone
+today = pd.Timestamp.now(tz=denmark_tz).normalize()
 
 # Compute month period that contains last_date
 month_start = last_date.replace(day=1)
@@ -257,13 +290,13 @@ week_pct = min(max(spent_week_cumulative / accumulated_weekly_limit, 0), 2) if a
 # Layout: top metrics
 
 # Format latest transaction with time if available
-if last_date_with_time.time() != pd.Timestamp("00:00:00").time():
-    # Time exists, show it
-    st.write(f"Latest transaction: **{last_date_with_time.strftime('%B %d, %Y at %H:%M')}**")
+if last_date_with_time.time() != pd.Timestamp("00:00:00", tz=denmark_tz).time():
+    # Time exists, show it in Denmark timezone
+    st.write(f"Latest transaction: **{last_date_with_time.strftime('%B %d, %Y at %H:%M')} (DK time)**")
 else:
     # No time, show date only
-    st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')}**")
-st.write(f"Today: **{today.date()}**")
+    st.write(f"Latest transaction: **{last_date.strftime('%B %d, %Y')} (DK time)**")
+st.write(f"Today: **{today.date()} (DK time)**")
 st.markdown(f"----")
 col1, col2 = st.columns([1.2, 1.2])
 with col1:
@@ -338,13 +371,14 @@ st.markdown("---")
 # Get the full month range from 1st to last day of the month
 month_first_day = last_date.replace(day=1)
 month_last_day = (month_first_day + pd.DateOffset(months=1) - pd.DateOffset(days=1)).normalize()
-month_days = pd.date_range(start=month_first_day, end=month_last_day, freq='D')
+# Create timezone-aware date range for Denmark
+month_days = pd.date_range(start=month_first_day, end=month_last_day, freq='D', tz=denmark_tz)
 
 daily = df.loc[(df["date"] >= month_first_day) & (df["date"] <= month_last_day)].copy()
 daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().reindex(month_days, fill_value=0).cumsum()
 
 # Create separate dataframes for spending (only up to last_date) and limit (full month)
-spending_days = pd.date_range(start=month_first_day, end=last_date, freq='D')
+spending_days = pd.date_range(start=month_first_day, end=last_date, freq='D', tz=denmark_tz)
 spending_sum = daily_sum.reindex(spending_days)
 spending_df = pd.DataFrame({"date": spending_days, "cumulative_spent": spending_sum.values})
 

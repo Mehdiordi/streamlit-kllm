@@ -6,3 +6,4 @@ altair>=5.0
 requests>=2.30
 boto3>=1.28,<2.0
 botocore
+pytz>=2023.3
