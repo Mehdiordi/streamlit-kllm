@@ -722,7 +722,7 @@ for row in range(3):
             # Show breakdown of income sources (USD salary + cashback)
             income_parts = []
             if actual_income_usd > 0:
-                income_parts.append(f"${actual_income_usd:,.0f} USD")
+                income_parts.append(f"${actual_income_usd:,.0f}")
             if cashback_income_dkk > 0:
                 income_parts.append(f"{cashback_income_dkk:,.0f} DKK cashback")
             
