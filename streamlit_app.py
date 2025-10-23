@@ -552,14 +552,64 @@ month_last_day = (month_first_day + pd.DateOffset(months=1) - pd.DateOffset(days
 month_days = pd.date_range(start=month_first_day, end=month_last_day, freq='D', tz=denmark_tz)
 
 daily = df.loc[(df["date"] >= month_first_day) & (df["date"] <= month_last_day)].copy()
-daily_sum = daily.groupby(daily["date"].dt.normalize())["expense_dkk"].sum().reindex(month_days, fill_value=0).cumsum()
+
+# Calculate daily net spending (gross expenses minus refunds, same logic as top metrics)
+daily_net_spending = []
+for day in month_days:
+    day_df = daily[daily["date"].dt.normalize() == day.normalize()]
+    
+    if day_df.empty:
+        daily_net_spending.append(0)
+        continue
+    
+    # Gross expenses for this day
+    day_gross_expenses = day_df[day_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+    
+    # Refunds for this day (same logic as monthly calculation)
+    day_positive = day_df[day_df["amount_dkk"] > 0]
+    cashback_mask_day = (
+        day_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+        day_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
+        day_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
+    )
+    day_refunds = day_positive[
+        (day_positive["currency"] != "USD") & (~cashback_mask_day)
+    ]["amount_dkk"].sum()
+    
+    # Net spending = gross expenses - refunds
+    day_net = day_gross_expenses - day_refunds
+    daily_net_spending.append(day_net)
+
+daily_sum = pd.Series(daily_net_spending, index=month_days).cumsum()
 
 # Create separate dataframes for spending (only up to last_date) and limit (full month)
 spending_days = pd.date_range(start=month_first_day, end=last_date, freq='D', tz=denmark_tz)
 spending_sum = daily_sum.reindex(spending_days)
-spending_df = pd.DataFrame({"date": spending_days, "cumulative_spent": spending_sum.values})
 
-limit_df = pd.DataFrame({"date": month_days, "limit_progress": [(i+1)/len(month_days) * monthly_limit for i in range(len(month_days))]})
+# If last_date is before today, extend the spending line to today with the same value
+if last_date < today:
+    # Get the last spending value
+    last_spending_value = spending_sum.iloc[-1] if not spending_sum.empty else 0
+    
+    # Create extended date range from last_date + 1 day to today
+    extended_days = pd.date_range(start=last_date + pd.Timedelta(days=1), end=today, freq='D', tz=denmark_tz)
+    
+    # Create extended spending series with constant last value
+    extended_spending = pd.Series([last_spending_value] * len(extended_days), index=extended_days)
+    
+    # Combine original and extended spending
+    all_spending_days = pd.date_range(start=month_first_day, end=today, freq='D', tz=denmark_tz)
+    combined_spending = pd.concat([spending_sum, extended_spending])
+else:
+    # If last_date is today or later, use original data
+    all_spending_days = spending_days
+    combined_spending = spending_sum
+
+spending_df = pd.DataFrame({"date": all_spending_days, "cumulative_spent": combined_spending.values})
+
+# Extend limit line to today as well
+limit_days_extended = pd.date_range(start=month_first_day, end=max(today, month_last_day), freq='D', tz=denmark_tz)
+limit_df = pd.DataFrame({"date": limit_days_extended, "limit_progress": [(i+1)/len(month_days) * monthly_limit for i in range(len(limit_days_extended))]})
 
 # Create responsive chart with conditional coloring
 fig2 = go.Figure()
@@ -580,6 +630,11 @@ if not spending_df.empty:
     spending_with_limit["days_from_start"] = (spending_with_limit["date"] - month_first_day).dt.days + 1
     spending_with_limit["corresponding_limit"] = spending_with_limit["days_from_start"] / len(month_days) * monthly_limit
     
+    # Find the index where CSV data ends (last_date) to change line style
+    csv_end_index = None
+    if last_date < today:
+        csv_end_index = len(pd.date_range(start=month_first_day, end=last_date, freq='D', tz=denmark_tz)) - 1
+    
     # Create segments based on whether spending is above or below limit
     for i in range(len(spending_with_limit)):
         current_row = spending_with_limit.iloc[i]
@@ -588,6 +643,10 @@ if not spending_df.empty:
         is_over_limit = current_row["cumulative_spent"] > current_row["corresponding_limit"]
         color = "#ff4b4b" if is_over_limit else "#1f77b4"  # Red if over, blue if under
         
+        # Determine if this is extended data (after CSV ends)
+        is_extended = csv_end_index is not None and i > csv_end_index
+        line_style = dict(color=color, width=3, dash="dot" if is_extended else "solid")
+        
         # Add line segment from previous point to current point
         if i > 0:
             prev_row = spending_with_limit.iloc[i-1]
@@ -595,7 +654,7 @@ if not spending_df.empty:
                 x=[prev_row["date"], current_row["date"]], 
                 y=[prev_row["cumulative_spent"], current_row["cumulative_spent"]],
                 mode="lines",
-                line=dict(color=color, width=3),
+                line=line_style,
                 showlegend=False,
                 hoverinfo='skip'
             ))
@@ -605,22 +664,49 @@ if not spending_df.empty:
                 x=[current_row["date"]], 
                 y=[current_row["cumulative_spent"]],
                 mode="lines",
-                line=dict(color=color, width=3),
+                line=line_style,
                 showlegend=False,
                 hoverinfo='skip'
             ))
 
-    # Add green dot at the end of the spending line
-    last_spending_point = spending_df.iloc[-1]
-    fig2.add_trace(go.Scatter(
-        x=[last_spending_point["date"]], 
-        y=[last_spending_point["cumulative_spent"]], 
-        mode="markers", 
-        marker=dict(color="green", size=8),
-        name="Current position",
-        showlegend=False,
-        hoverinfo='skip'
-    ))
+    # Add different colored dots for CSV end and current position
+    if csv_end_index is not None and csv_end_index < len(spending_df):
+        # Green dot at CSV data end (last transaction date)
+        csv_end_point = spending_df.iloc[csv_end_index]
+        fig2.add_trace(go.Scatter(
+            x=[csv_end_point["date"]], 
+            y=[csv_end_point["cumulative_spent"]], 
+            mode="markers", 
+            marker=dict(color="green", size=8),
+            name=f"Last transaction ({last_date.strftime('%b %d')})",
+            showlegend=False,
+            hovertemplate=f"Last transaction: {last_date.strftime('%B %d')}<br>Amount: {csv_end_point['cumulative_spent']:,.0f} DKK<extra></extra>"
+        ))
+    
+    # Orange dot at today's position (end of extended line)
+    if last_date < today and not spending_df.empty:
+        today_point = spending_df.iloc[-1]
+        fig2.add_trace(go.Scatter(
+            x=[today_point["date"]], 
+            y=[today_point["cumulative_spent"]], 
+            mode="markers", 
+            marker=dict(color="orange", size=8),
+            name=f"Today ({today.strftime('%b %d')})",
+            showlegend=False,
+            hovertemplate=f"Today: {today.strftime('%B %d')}<br>Amount: {today_point['cumulative_spent']:,.0f} DKK<br>(No new transactions)<extra></extra>"
+        ))
+    elif not spending_df.empty:
+        # If CSV is up to date, show green dot at current position
+        current_point = spending_df.iloc[-1]
+        fig2.add_trace(go.Scatter(
+            x=[current_point["date"]], 
+            y=[current_point["cumulative_spent"]], 
+            mode="markers", 
+            marker=dict(color="green", size=8),
+            name="Current position",
+            showlegend=False,
+            hoverinfo='skip'
+        ))
 
 # Responsive layout settings - disable interactivity for mobile
 fig2.update_layout(
