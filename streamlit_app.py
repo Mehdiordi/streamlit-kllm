@@ -159,16 +159,28 @@ amt_candidates = ["Target amount (after fees)", "Amount", "amount", "Value"]
 cur_candidates = ["Target currency", "Currency", "currency"]
 dir_candidates = ["Direction", "direction", "Type", "type"]
 cp_candidates = ["Target name", "Merchant", "merchant", "Counterparty", "counterparty", "Name"]
+# NEW: status candidates
+status_candidates = ["Status", "status", "STATUS", "State", "state", "Transaction Status"]
 
 date_col = next((c for c in date_candidates if c in df_raw.columns), None)
 amt_col = next((c for c in amt_candidates if c in df_raw.columns), None)
 cur_col = next((c for c in cur_candidates if c in df_raw.columns), None)
 dir_col = next((c for c in dir_candidates if c in df_raw.columns), None)
 cp_col = next((c for c in cp_candidates if c in df_raw.columns), None)
+status_col = next((c for c in status_candidates if c in df_raw.columns), None)
 
 if date_col is None or amt_col is None:
     st.error("Could not find required columns (date and amount). Please ensure CSV has a date and an amount column.")
     st.stop()
+
+# NEW: drop cancelled rows before any parsing/calculation
+if status_col is not None:
+    status_upper = df_raw[status_col].astype(str).str.upper().str.strip()
+    keep_mask = ~status_upper.isin(["CANCELLED", "CANCELED"])
+    cancelled_count = int((~keep_mask).sum())
+    if cancelled_count > 0:
+        st.sidebar.info(f"⏭️ Skipped {cancelled_count} cancelled transactions")
+    df_raw = df_raw[keep_mask].copy()
 
 # Parse date column
 df_raw[date_col] = pd.to_datetime(df_raw[date_col], errors="coerce")
