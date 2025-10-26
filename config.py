@@ -47,6 +47,9 @@ personal_categories = {
     'Ingo': 'Groceries',
     'Apotek': 'Groceries',
     'KaffeKapslen.dk': 'Groceries',
+    'Maxi Zoo': 'Groceries',
+    'Themallows.dk': 'Groceries',
+    'Borns Vilkfr - Ba - Mobile Pay': 'Groceries',
     
     # Eat Out
     'Falafelo': 'Eat Out',
@@ -116,6 +119,8 @@ personal_categories = {
     'Holdsport.dk Aps': 'Ice Hockey',
     'Mette Sauffaus': 'Ice Hockey',
     'Rexhockey': 'Ice Hockey',
+    'Puk Bageri Aps': 'Ice Hockey',
+    'Rsik - Kiosk': 'Ice Hockey',
     
     # Trip (anything outside Denmark or travel-related)
     'Bahne': 'Trip',

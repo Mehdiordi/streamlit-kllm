@@ -159,7 +159,6 @@ amt_candidates = ["Target amount (after fees)", "Amount", "amount", "Value"]
 cur_candidates = ["Target currency", "Currency", "currency"]
 dir_candidates = ["Direction", "direction", "Type", "type"]
 cp_candidates = ["Target name", "Merchant", "merchant", "Counterparty", "counterparty", "Name"]
-# NEW: status candidates
 status_candidates = ["Status", "status", "STATUS", "State", "state", "Transaction Status"]
 
 date_col = next((c for c in date_candidates if c in df_raw.columns), None)
@@ -173,7 +172,7 @@ if date_col is None or amt_col is None:
     st.error("Could not find required columns (date and amount). Please ensure CSV has a date and an amount column.")
     st.stop()
 
-# NEW: drop cancelled rows before any parsing/calculation
+# Drop CANCELLED rows early
 if status_col is not None:
     status_upper = df_raw[status_col].astype(str).str.upper().str.strip()
     keep_mask = ~status_upper.isin(["CANCELLED", "CANCELED"])
@@ -215,10 +214,29 @@ df["date"] = df[date_col]
 df["amount"] = df.apply(unified_amount, axis=1)
 df["currency"] = df[cur_col] if cur_col else "DKK"
 df["counterparty"] = df[cp_col] if cp_col else "Unknown"
+# Normalize/keep direction and status for logic below
+df["direction"] = df[dir_col] if dir_col else "UNKNOWN"
+df["status"] = df[status_col] if status_col else "UNKNOWN"
 
 # Drop invalid rows
 df = df[~df["date"].isna()].copy()
 df = df[~df["amount"].isna()].copy()
+
+# Skip REFUNDED OUT rows (negative or zero after sign normalization)
+if status_col is not None:
+    status_norm = df["status"].astype(str).str.upper().str.strip()
+    dir_norm = df["direction"].astype(str).str.upper().str.strip()
+    has_dir = dir_col is not None
+
+    refunded_out_mask = (status_norm == "REFUNDED") & (
+        (has_dir & dir_norm.str.startswith("OUT")) | (~has_dir & (df["amount"] <= 0))
+    ) & (df["amount"] <= 0)
+
+    refunded_out_count = int(refunded_out_mask.sum())
+    if refunded_out_count > 0:
+        st.sidebar.info(f"⏭️ Skipped {refunded_out_count} refunded OUT transactions")
+
+    df = df[~refunded_out_mask].copy()
 
 if df.empty:
     st.warning("No valid rows after parsing date/amount.")
@@ -358,7 +376,6 @@ def calculate_budget_carryover(df, current_date):
             'limit': budget_limit,
             'result': month_result
         })
-    
     return carry_over_amount, carry_over_details
 
 # Calculate budget carry-over and adjusted monthly limit
@@ -412,43 +429,38 @@ current_period = last_date.to_period("M")
 period_mask = df["date"].dt.to_period("M") == current_period
 current_month_df = df.loc[period_mask]
 
-gross_month_expenses = current_month_df[current_month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
+gross_month_expenses = current_month_df[current_month_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # positive
 
-# Calculate refunds for current month (non-USD positive transactions, excluding cashback)
-current_month_positive = current_month_df[current_month_df["amount_dkk"] > 0]
-# Exclude cashback from refunds (cashback should be treated as income)
-# Check for cashback in multiple columns (ID, Reference, counterparty)
-cashback_mask = (
-    current_month_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-    current_month_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-    current_month_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
-)
-current_month_refunds_df = current_month_positive[
-    (current_month_positive["currency"] != "USD") & (~cashback_mask)
-]
-current_month_refunds = current_month_refunds_df["amount_dkk"].sum()
+# Refunds: Status=REFUNDED and Direction=IN (keep as positive income)
+if status_col is not None:
+    status_norm_cm = current_month_df["status"].astype(str).str.upper().str.strip()
+    dir_norm_cm = current_month_df["direction"].astype(str).str.upper().str.strip()
+    has_dir = dir_col is not None
+    refunds_mask_month = (status_norm_cm == "REFUNDED") & (
+        (has_dir & dir_norm_cm.str.startswith("IN")) | (~has_dir & (current_month_df["amount_dkk"] > 0))
+    ) & (current_month_df["amount_dkk"] > 0)
+else:
+    # Fallback if no status column: keep previous heuristic
+    refunds_mask_month = (current_month_df["amount_dkk"] > 0)
 
-# Net spending = gross expenses - refunds
+current_month_refunds = current_month_df.loc[refunds_mask_month, "amount_dkk"].sum()
+
 spent_month_to_last_date = gross_month_expenses - current_month_refunds
 
-# For weekly: use cumulative monthly spending vs accumulated weekly limits
-spent_week_cumulative = spent_month_to_last_date  # This is cumulative from month start
-
-# Calculate current week spending only (for display purposes) - also net
+# Weekly (same refund logic)
 current_week_df = df.loc[(df["date"] >= week_start) & (df["date"] <= week_end)]
-gross_week_expenses = current_week_df[current_week_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
-current_week_positive = current_week_df[current_week_df["amount_dkk"] > 0]
-# Exclude cashback from refunds (cashback should be treated as income)
-# Check for cashback in multiple columns (ID, Reference, counterparty)
-cashback_mask_week = (
-    current_week_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-    current_week_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-    current_week_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
-)
-current_week_refunds_df = current_week_positive[
-    (current_week_positive["currency"] != "USD") & (~cashback_mask_week)
-]
-current_week_refunds = current_week_refunds_df["amount_dkk"].sum()
+gross_week_expenses = current_week_df[current_week_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1
+
+if status_col is not None:
+    status_norm_cw = current_week_df["status"].astype(str).str.upper().str.strip()
+    dir_norm_cw = current_week_df["direction"].astype(str).str.upper().str.strip()
+    refunds_mask_week = (status_norm_cw == "REFUNDED") & (
+        (has_dir & dir_norm_cw.str.startswith("IN")) | (~has_dir & (current_week_df["amount_dkk"] > 0))
+    ) & (current_week_df["amount_dkk"] > 0)
+else:
+    refunds_mask_week = (current_week_df["amount_dkk"] > 0)
+
+current_week_refunds = current_week_df.loc[refunds_mask_week, "amount_dkk"].sum()
 spent_current_week_only = gross_week_expenses - current_week_refunds
 
 # Also show "till today" totals (if CSV contains entries up to today, it'll be same)
@@ -457,6 +469,9 @@ spent_month_to_today = df.loc[(df["date"] >= today.replace(day=1)) & (df["date"]
 weeks_in_month_today = ((today - today.replace(day=1)).days // 7) + 1 if today <= last_date else weeks_in_month
 accumulated_weekly_limit_today = weekly_limit * weeks_in_month_today
 spent_week_to_today = spent_month_to_today  # Cumulative from month start
+
+# NEW: cumulative spending from month start up to last_date (align with weekly accumulated limit)
+spent_week_cumulative = spent_month_to_last_date
 
 # Comparison computations
 month_remaining = monthly_limit - spent_month_to_last_date
@@ -577,16 +592,19 @@ for day in month_days:
     # Gross expenses for this day
     day_gross_expenses = day_df[day_df["amount_dkk"] < 0]["amount_dkk"].sum() * -1  # Convert to positive
     
-    # Refunds for this day (same logic as monthly calculation)
-    day_positive = day_df[day_df["amount_dkk"] > 0]
-    cashback_mask_day = (
-        day_positive.get("ID", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-        day_positive.get("Reference", pd.Series(dtype=str)).str.contains("CASHBACK", case=False, na=False) |
-        day_positive["counterparty"].str.contains("CASHBACK", case=False, na=False)
-    )
-    day_refunds = day_positive[
-        (day_positive["currency"] != "USD") & (~cashback_mask_day)
-    ]["amount_dkk"].sum()
+    # Refunds for this day (Status=REFUNDED and Direction=IN)
+    if status_col is not None:
+        status_norm_day = day_df["status"].astype(str).str.upper().str.strip()
+        dir_norm_day = day_df["direction"].astype(str).str.upper().str.strip()
+        day_refunds = day_df.loc[
+            (status_norm_day == "REFUNDED")
+            & (dir_norm_day.str.startswith("IN"))
+            & (day_df["amount_dkk"] > 0),
+            "amount_dkk"
+        ].sum()
+    else:
+        # Fallback if no status column
+        day_refunds = day_df.loc[day_df["amount_dkk"] > 0, "amount_dkk"].sum()
     
     # Net spending = gross expenses - refunds
     day_net = day_gross_expenses - day_refunds
