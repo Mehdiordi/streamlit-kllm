@@ -121,6 +121,7 @@ personal_categories = {
     'Rexhockey': 'Ice Hockey',
     'Puk Bageri Aps': 'Ice Hockey',
     'Rsik - Kiosk': 'Ice Hockey',
+    'RØDOVRE SKØJTE & I': 'Ice Hockey',
     
     # Trip (anything outside Denmark or travel-related)
     'Bahne': 'Trip',
