@@ -193,8 +193,8 @@ personal_categories = {
 monthly_limits = {
     # 2025 (from October onwards - when carry-over starts)
     (2025, 10): 18000,  # October 2025 (carry-over starts here)
-    (2025, 11): 18000,  # November 2025
-    (2025, 12): 21000,  # December 2025 (higher for holidays)
+    (2025, 11): 21000,  # November 2025
+    (2025, 12): 25000,  # December 2025 (higher for holidays)
     
     # 2026 - full year
     (2026, 1): 21000,   # January 2026 (higher for post-holiday spending)
