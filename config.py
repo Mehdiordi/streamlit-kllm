@@ -47,10 +47,15 @@ personal_categories = {
     'Ingo': 'Groceries',
     'Apotek': 'Groceries',
     'KaffeKapslen.dk': 'Groceries',
-    'Maxi Zoo': 'Groceries',
-    'Themallows.dk': 'Groceries',
-    'Borns Vilkfr - Ba - Mobile Pay': 'Groceries',
     
+    
+    # Pet supplies
+    'Maxi Zoo': 'Pet Supplies',
+    'Themallows.dk': 'Pet Supplies',
+    'Borns Vilkfr - Ba - Mobile Pay': 'Pet Supplies',
+    'Bonnie Dyrecenter Rodovre': 'Pet Supplies',
+    
+
     # Eat Out
     'Falafelo': 'Eat Out',
     'Falafillo': 'Eat Out',
@@ -112,6 +117,7 @@ personal_categories = {
     'Ladcyklen.dk - Mobile Pay': 'Services',
     'Kerstin Nellen': 'Extra',
     'Søstrene Grene': 'Extra',
+    'Thiele': 'Extra',
     'Thansen': 'Home Maintenance',
     
     # Ice Hockey
