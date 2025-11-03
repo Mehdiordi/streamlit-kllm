@@ -257,7 +257,7 @@ def get_monthly_limit(year, month):
     Returns the configured limit or `default_monthly_limit` when not found.
     """
     key = _normalize_key_from_parts(year, month)
-    if not key:
-        return default_monthly_limit
+    # if not key:
+    #     return default_monthly_limit
 
-    return monthly_limits.get(key, default_monthly_limit)
+    return monthly_limits.get(key)
