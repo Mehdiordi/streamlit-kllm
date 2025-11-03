@@ -194,32 +194,70 @@ personal_categories = {
 
 # Monthly Budget Limits Configuration
 # Set different budget limits for each month (DKK)
+# Keys are now strings in the format 'YYYY-MM' for robustness and easier serialization.
 # Starting from October 2025, carry-over system tracks surplus/deficit between months
 monthly_limits = {
     # 2025 (from October onwards - when carry-over starts)
-    (2025, 10): 18000,  # October 2025 (carry-over starts here)
-    (2025, 11): 24000,  # November 2025
-    (2025, 12): 26000,  # December 2025 (higher for holidays)
-    
+    '2025-10': 18000,  # October 2025 (carry-over starts here)
+    '2025-11': 24000,  # November 2025
+    '2025-12': 26000,  # December 2025 (higher for holidays)
+
     # 2026 - full year
-    (2026, 1): 21000,   # January 2026 (higher for post-holiday spending)
-    (2026, 2): 21000,   # February 2026
-    (2026, 3): 21000,   # March 2026
-    (2026, 4): 21000,   # April 2026
-    (2026, 5): 21000,   # May 2026
-    (2026, 6): 21000,   # June 2026
-    (2026, 7): 21000,   # July 2026
-    (2026, 8): 21000,   # August 2026
-    (2026, 9): 21000,   # September 2026
-    (2026, 10): 21000,  # October 2026
-    (2026, 11): 21000,  # November 2026
-    (2026, 12): 21000,  # December 2026 (higher for holidays)
+    '2026-01': 21000,   # January 2026 (higher for post-holiday spending)
+    '2026-02': 21000,   # February 2026
+    '2026-03': 21000,   # March 2026
+    '2026-04': 21000,   # April 2026
+    '2026-05': 21000,   # May 2026
+    '2026-06': 21000,   # June 2026
+    '2026-07': 21000,   # July 2026
+    '2026-08': 21000,   # August 2026
+    '2026-09': 21000,   # September 2026
+    '2026-10': 21000,  # October 2026
+    '2026-11': 21000,  # November 2026
+    '2026-12': 21000,  # December 2026 (higher for holidays)
 }
 
 # Default monthly limit for months not specified above
 default_monthly_limit = 21000
 
-# Helper function to get monthly limit for a given year and month
+
+def _normalize_key_from_parts(year, month):
+    """Return a 'YYYY-MM' string given year and month inputs.
+
+    Accepts ints (year, month), a tuple (year, month), or strings for flexibility.
+    """
+    # If user accidentally passed a single tuple like (2025,11)
+    if isinstance(year, tuple) and month is None:
+        y, m = year
+        year, month = y, m
+
+    # If someone passed a single string 'YYYY-MM' as year and month is None
+    if isinstance(year, str) and month in (None, ''):
+        # Basic validation: ensure it's already in YYYY-MM form
+        return year
+
+    try:
+        y_int = int(year)
+        m_int = int(month)
+    except Exception:
+        # Fallback: return something that won't match any key so default is returned
+        return None
+
+    return f"{y_int:04d}-{m_int:02d}"
+
+
 def get_monthly_limit(year, month):
-    """Get the budget limit for a specific year and month"""
-    return monthly_limits.get((year, month), default_monthly_limit)
+    """Get the budget limit for a specific year and month.
+
+    Parameters:
+    - year, month: commonly passed as two ints (2025, 11). Also supports passing
+      a single tuple as the first argument like (2025, 11) by leaving month=None,
+      or passing a pre-formatted string year='2025-11' with month=None.
+
+    Returns the configured limit or `default_monthly_limit` when not found.
+    """
+    key = _normalize_key_from_parts(year, month)
+    if not key:
+        return default_monthly_limit
+
+    return monthly_limits.get(key, default_monthly_limit)
