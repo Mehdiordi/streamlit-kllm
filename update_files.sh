@@ -89,6 +89,18 @@ fi
 
 DEST="s3://${BUCKET}/${KEY}"
 
+# Defensive sanitization: strip accidental CR/LF or multi-line values from AWS env vars.
+# If a secret was exported from a file with a trailing newline or contains multiple
+# lines (e.g. duplicated contents), take the first non-empty line and remove CR/LF.
+if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+  AWS_ACCESS_KEY_ID="$(printf '%s' "$AWS_ACCESS_KEY_ID" | sed -n '1p' | tr -d '\r\n')"
+  export AWS_ACCESS_KEY_ID
+fi
+if [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  AWS_SECRET_ACCESS_KEY="$(printf '%s' "$AWS_SECRET_ACCESS_KEY" | sed -n '1p' | tr -d '\r\n')"
+  export AWS_SECRET_ACCESS_KEY
+fi
+
 echo "Uploading '$SOURCE' → $DEST"
 # Use server-side encryption and set content-type, and overwrite by default.
 # Note: remove --sse if not desired.

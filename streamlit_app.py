@@ -10,33 +10,21 @@ import io
 from botocore.exceptions import ClientError
 import pytz
 
-# Import personal categories and monthly limits for expense categorization
-try:
-    from config import personal_categories, get_monthly_limit
-    config_loaded = True
-    # st.sidebar.success(f"✅ Config loaded: {len(personal_categories)} categories")
-except ImportError as e:
-    # Fallback categories for when config.py is not available (e.g., in deployment)
-    personal_categories = {
-        # Essential categories for basic functionality
-        'Netto': 'Groceries', 'Kvickly': 'Groceries', 'nemlig.com': 'Groceries',
-        'Coop 365': 'Groceries', 'REMA 1000': 'Groceries', 'føtex': 'Groceries',
-        'Circle K': 'Fuel', 'Shell': 'Fuel', 'Q8': 'Fuel', 'Uno-X': 'Fuel',
-        'Amazon': 'Amazon', 'Amazon Web Services': 'Amazon',
-        'Boozt.com': 'Clothes', 'Mango': 'Clothes', 'Adidas': 'Clothes',
-        'McDonald\'s': 'Eat Out', 'Lagkagehuset': 'Eat Out', '7-Eleven': 'Eat Out',
-        'Roedovre Skoejte Isho': 'Ice Hockey', 'Holdsport': 'Ice Hockey',
-        'IKEA': 'Home Maintenance', 'Bauhaus': 'Home Maintenance',
-    }
-    config_loaded = False
-    st.sidebar.warning(f"⚠️ Using fallback config: {len(personal_categories)} basic categories")
-    
-    # Monthly limits fallback
-    def get_monthly_limit(year, month):
-        # Basic fallback limits
-        if month == 12 or month == 1:  # December or January
-            return 21000
-        return 18000
+# Suppress noisy but non-actionable warnings that clutter the terminal while
+# Streamlit is running. These are display/deprecation warnings only and do
+# not affect logic or behaviour — we intentionally keep functionality unchanged.
+import warnings
+
+# Pandas/period warnings about dropping timezone info when converting to Period/PeriodArray
+warnings.filterwarnings('ignore', message=r'.*Converting to Period.*')
+
+# Streamlit deprecation: use_container_width -> width (display-only)
+warnings.filterwarnings('ignore', message=r'.*Please replace `use_container_width` with `width`.*')
+
+# Deprecation for bitwise inversion on bools (comes from using ~ on boolean Series)
+warnings.filterwarnings('ignore', category=DeprecationWarning, message=r".*Bitwise inversion '~' on bool is deprecated.*")
+
+from config import personal_categories, get_monthly_limit
 
 st.set_page_config(page_title=" Budget Tracker", layout="wide")
 st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
@@ -46,12 +34,7 @@ default_path = Path("data/transaction-history.csv")
 csv_path = st.sidebar.text_input("Local CSV path (used if not uploading)", value=str(default_path))
 
 # Monthly limit - use config as default but allow user adjustment
-default_monthly_limit = 18000  # Will be updated after we load the config
-monthly_limit_input = st.sidebar.number_input("Monthly limit (DKK)", min_value=0, value=default_monthly_limit, step=500, format="%d", help="Adjustable for testing - resets to config.py value on refresh")
-
-# Calculate weekly limit from monthly
-weekly_default = float(monthly_limit_input) / 4.33
-weekly_limit = st.sidebar.number_input("Weekly limit (DKK)", min_value=0.0, value=round(weekly_default, 2), step=100.0, format="%.2f")
+default_monthly_limit = 18000  # fallback default; widget will be initialized from config after data load
 
 st.sidebar.markdown("---")
 fx_dkk = st.sidebar.number_input("EUR → DKK", value=7.44, format="%.4f")
@@ -283,16 +266,11 @@ def categorize_counterparty(counterparty):
 # Apply categorization
 df["category"] = df["counterparty"].apply(categorize_counterparty)
 
-# Debug info for categorization
-if not config_loaded:
-    st.sidebar.warning("⚠️ Using fallback categorization")
-    st.sidebar.caption("To fix: Ensure config.py is deployed and accessible")
-else:
-    unique_categories = df["category"].value_counts()
-    no_category_count = unique_categories.get("no-category", 0)
-    total_transactions = len(df)
-    categorized_pct = ((total_transactions - no_category_count) / total_transactions * 100) if total_transactions > 0 else 0
-    st.sidebar.info(f"📊 Categorized: {categorized_pct:.1f}% of transactions")
+unique_categories = df["category"].value_counts()
+no_category_count = unique_categories.get("no-category", 0)
+total_transactions = len(df)
+categorized_pct = ((total_transactions - no_category_count) / total_transactions * 100) if total_transactions > 0 else 0
+st.sidebar.info(f"📊 Categorized: {categorized_pct:.1f}% of transactions")
 
 # Show category breakdown in sidebar for debugging
 with st.sidebar.expander("🏷️ Category Breakdown"):
@@ -305,6 +283,33 @@ last_date_with_time = df["date"].max()  # Keep original time (now in Denmark tim
 last_date = df["date"].max().normalize()
 # Get current time in Denmark timezone
 today = pd.Timestamp.now(tz=denmark_tz).normalize()
+
+# Initialize monthly/weekly widgets from config for the current month so the
+# sidebar shows the month-specific default (e.g., November 2025 -> 21000).
+current_year = last_date.year
+current_month = last_date.month
+base_monthly_limit = get_monthly_limit(current_year, current_month)
+
+
+monthly_limit_input = st.sidebar.number_input(
+    "Monthly limit (DKK)",
+    min_value=0,
+    value=base_monthly_limit,
+    step=500,
+    format="%d",
+    help="Adjustable for testing - defaults to config.py value for the current month",
+    key="monthly_limit_input",
+)
+
+weekly_default = float(monthly_limit_input) / 4.33
+weekly_limit = st.sidebar.number_input(
+    "Weekly limit (DKK)",
+    min_value=0.0,
+    value=round(weekly_default, 2),
+    step=100.0,
+    format="%.2f",
+    key="weekly_limit_input",
+)
 
 # Compute month period that contains last_date
 month_start = last_date.replace(day=1)
@@ -381,14 +386,40 @@ def calculate_budget_carryover(df, current_date):
 # Calculate budget carry-over and adjusted monthly limit
 carry_over_amount, carry_over_details = calculate_budget_carryover(df, last_date)
 
-# Get base monthly limit for current month from config
-current_year = last_date.year
-current_month = last_date.month
-base_monthly_limit = get_monthly_limit(current_year, current_month)
+# Determine the effective monthly limit to use for calculations.
+# Behavior: if the user left the sidebar input at the script's initial default
+# value (variable `default_monthly_limit`), prefer the value from `config.py`.
+# This keeps the UI editable while ensuring the app uses the configured default
+# for the month when the user hasn't changed the widget.
+if monthly_limit_input == default_monthly_limit:
+    applied_monthly_limit = base_monthly_limit
+else:
+    applied_monthly_limit = monthly_limit_input
 
-# Use user input for monthly limit, or fall back to config value
-# Adjusted monthly limit = user input - carry over (surplus adds to limit, deficit reduces it)
-monthly_limit = monthly_limit_input - carry_over_amount
+# Adjusted monthly limit = effective limit - carry over (surplus adds to limit, deficit reduces it)
+monthly_limit = applied_monthly_limit - carry_over_amount
+
+# Sync sidebar widgets to the applied config value when appropriate.
+# We use explicit session_state keys for the widgets (see above). If the
+# user left the monthly widget at the script default, update the widget
+# values from the config and trigger a rerun once to show the new values.
+try:
+    if monthly_limit_input == default_monthly_limit and not st.session_state.get("limits_synced_from_config", False):
+        # Set the widget session state values and mark synced to avoid loops.
+        st.session_state["monthly_limit_input"] = applied_monthly_limit
+        st.session_state["weekly_limit_input"] = round(float(applied_monthly_limit) / 4.33, 2)
+        st.session_state["limits_synced_from_config"] = True
+        # Rerun so Streamlit will render the widgets with the updated values.
+        st.experimental_rerun()
+    else:
+        # Ensure local weekly_limit reflects the widget/session state
+        try:
+            weekly_limit = float(st.session_state.get("weekly_limit_input", weekly_limit))
+        except Exception:
+            weekly_limit = round(float(monthly_limit_input) / 4.33, 2)
+except Exception:
+    # If session state isn't available, continue without syncing
+    pass
 
 # Update sidebar with current month's budget details
 st.sidebar.markdown("---")
@@ -396,6 +427,8 @@ st.sidebar.subheader("Current Month Budget")
 st.sidebar.write(f"**{last_date.strftime('%B %Y')}**")
 st.sidebar.write(f"Config default: {base_monthly_limit:,.0f} DKK")
 st.sidebar.write(f"Your setting: {monthly_limit_input:,.0f} DKK")
+# Show which monthly limit is actually used for calculations (config override if user left default)
+st.sidebar.write(f"Effective (used) limit before carry-over: {applied_monthly_limit:,.0f} DKK")
 
 if carry_over_amount != 0:
     if carry_over_amount > 0:  # Deficit

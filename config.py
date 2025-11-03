@@ -12,8 +12,10 @@ personal_categories = {
     'Circle K': 'Fuel',
     'Q8': 'Fuel',
     'Noahs Q8 Korsør': 'Fuel',
-    'Aral': 'Fuel',
-    'Esso': 'Fuel',
+
+    # Fuel-Trip
+    'Aral': 'Trip-Fuel',
+    'Esso': 'Trip-Fuel',
     
     # Car Services
     'Clean Car': 'Car Services',
@@ -185,6 +187,9 @@ personal_categories = {
     'Legoland': 'Trip',  # Theme park (could be trip)
     'Lalandia': 'Trip',  # Resort (could be trip)
     'Enjoy by Lillebaelt Nord': 'Trip',  # Rest stop
+    
+    # Entertainment
+    'Planetarium': 'Entertainment',
 }
 
 # Monthly Budget Limits Configuration
@@ -193,26 +198,26 @@ personal_categories = {
 monthly_limits = {
     # 2025 (from October onwards - when carry-over starts)
     (2025, 10): 18000,  # October 2025 (carry-over starts here)
-    (2025, 11): 21000,  # November 2025
-    (2025, 12): 25000,  # December 2025 (higher for holidays)
+    (2025, 11): 24000,  # November 2025
+    (2025, 12): 26000,  # December 2025 (higher for holidays)
     
     # 2026 - full year
     (2026, 1): 21000,   # January 2026 (higher for post-holiday spending)
-    (2026, 2): 18000,   # February 2026
-    (2026, 3): 18000,   # March 2026
-    (2026, 4): 18000,   # April 2026
-    (2026, 5): 18000,   # May 2026
-    (2026, 6): 18000,   # June 2026
-    (2026, 7): 18000,   # July 2026
-    (2026, 8): 18000,   # August 2026
-    (2026, 9): 18000,   # September 2026
-    (2026, 10): 18000,  # October 2026
-    (2026, 11): 18000,  # November 2026
+    (2026, 2): 21000,   # February 2026
+    (2026, 3): 21000,   # March 2026
+    (2026, 4): 21000,   # April 2026
+    (2026, 5): 21000,   # May 2026
+    (2026, 6): 21000,   # June 2026
+    (2026, 7): 21000,   # July 2026
+    (2026, 8): 21000,   # August 2026
+    (2026, 9): 21000,   # September 2026
+    (2026, 10): 21000,  # October 2026
+    (2026, 11): 21000,  # November 2026
     (2026, 12): 21000,  # December 2026 (higher for holidays)
 }
 
 # Default monthly limit for months not specified above
-default_monthly_limit = 18000
+default_monthly_limit = 21000
 
 # Helper function to get monthly limit for a given year and month
 def get_monthly_limit(year, month):
