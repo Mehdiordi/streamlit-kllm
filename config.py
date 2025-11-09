@@ -2,194 +2,192 @@
 # Categorize expenses based on Target name for better tracking
 
 personal_categories = {
-    'Roedovre Skoejte Isho': 'Ice Hockey',
-    'Rodovre Mighty Bulls Aps': 'Ice Hockey',
-    'Skatertown Aps': 'Ice Hockey',
-    
-    # Fuel
-    'Uno-X': 'Fuel',
-    'Shell': 'Fuel',
-    'Circle K': 'Fuel',
-    'Q8': 'Fuel',
-    'Noahs Q8 Korsør': 'Fuel',
+    # Activities
+    'Bagsvaerd Svoemmehal': 'Activities',
+    'Fitnessworldas - NYX': 'Activities',
+    'Planetarium': 'Activities',
+    'Sportscentret': 'Activities',
+    'Vestbad': 'Activities',
 
-    # Fuel-Trip
-    'Aral': 'Trip-Fuel',
-    'Esso': 'Trip-Fuel',
-    
-    # Car Services
-    'Clean Car': 'Car Services',
-    'Brobizz': 'Trip',  # Bridge tolls for car
-    'Øresundsbron': 'Car Services',  # Öresund Bridge toll
-    'Cph Parkering a S': 'Car Services',  # Copenhagen parking
-    'Ukrservice Aps': 'Car Services',
-
-    # Groceries
-    'Netto': 'Groceries',
-    'Kvickly': 'Groceries',
-    'nemlig.com': 'Groceries',
-    # Note: All Lidl stores are handled dynamically by checking for 'lidl' in the name
-    'Coop 365': 'Groceries',
-    'REMA 1000': 'Groceries',
-    'Carlsro Super': 'Groceries',
-    'føtex': 'Groceries',
-    'Rimi': 'Groceries',  # Baltic grocery chain
-    'IKI': 'Groceries',  # Lithuanian grocery chain
-    'Aldi': 'Groceries',
-    'IKEA': 'Home Maintenance',  # Home goods/groceries
-    'Bauhaus': 'Home Maintenance',  # Home improvement
-    'Plantorama Taas': 'Home Maintenance',  # Garden center
-    'Lygten Bazar': 'Groceries',
-    'Nan Lygten': 'Groceries',
-    'Bagt': 'Groceries',
-    'Lygtenbazar Aps': 'Groceries',
-    'Bog & idé': 'Groceries',
-    'MobilePay Danmark': 'Groceries',
-    'Heinemann Denmark': 'Groceries',
-    'Ingo': 'Groceries',
-    'Apotek': 'Groceries',
-    'KaffeKapslen.dk': 'Groceries',
-    
-    
-    # Pet supplies
-    'Maxi Zoo': 'Pet Supplies',
-    'Themallows.dk': 'Pet Supplies',
-    'Borns Vilkfr - Ba - Mobile Pay': 'Pet Supplies',
-    'Bonnie Dyrecenter Rodovre': 'Pet Supplies',
-    
-
-    # Eat Out
-    'Falafelo': 'Eat Out',
-    'Falafillo': 'Eat Out',
-    'Lagkagehuset': 'Eat Out',
-    'Oel Og Broed': 'Eat Out',
-    'Loomisp Det Gronne Kok': 'Eat Out',
-    'Loomisp Bauhouse Bistr': 'Eat Out',
-    'Imi 2610 Aps': 'Eat Out',
-    'Kiosk - Rsik - Ro - Mobile Pay': 'Eat Out',
-    'Kiosk - Rsik - Rºdovr': 'Eat Out',
-    'Ksf Kiosk': 'Eat Out',
-    'Kiosken - Rodovre - Mobile Pay': 'Eat Out',
-    "Monop'daily": 'Eat Out',
-    "McDonald's": 'Eat Out',
-    'Bangkok Truck': 'Eat Out',
-    '7-Eleven': 'Eat Out',
-    'Jagger - Roedovre Centrum': 'Eat Out',
-    'Ismageriet': 'Eat Out',
-    'Mcdnorrebrobycenter': 'Eat Out',
-    'Food and Co - Novo 9P 131': 'Eat Out',
-    'Grannys House': 'Eat Out',
-    'Ottoman Broenshoej Aps': 'Eat Out',
-    'Baba Kebab': 'Eat Out',
-    'Restaurant Jy': 'Eat Out',
-    'Jammi': 'Eat Out',
-    'Coffee Address': 'Eat Out',
-    'Flere Fugle': 'Eat Out',
-    'Copenhagen Fal': 'Eat Out',
-    
     # Amazon
     'Amazon': 'Amazon',
     'Amazon Web Services': 'Amazon',
-    
-    # Extra (miscellaneous purchases)
-    'Blade by J': 'Extra',
+
+    # Car Services
+    'Cph Parkering a S': 'Car Services',  # Copenhagen parking
+    'Clean Car': 'Car Services',
+    'Ukrservice Aps': 'Car Services',
+    'Øresundsbron': 'Car Services',  # Öresund Bridge toll
+
+    # Clothes
     'Adidas': 'Clothes',
-    'Fitnessworldas - NYX': 'Activities',
-    'Vestbad': 'Activities',
-    'Takko Fashion': 'Clothes',
-    'Simply.com': 'Extra',
-    'Sportscentret': 'Activities',
-    'Sportyfit Dk': 'Home Maintenance',
-    'Boozt.com': 'Clothes',
-    'Mango': 'Clothes',
-    'LinkedIn': 'Extra',
-    'Medium': 'Extra',
-    'Https Www.ladcyklen.dk': 'Extra',
-    'Bagsvaerd Svoemmehal': 'Activities',
-    'Royal Mermaid Amber Store': 'Extra',
-    'Gss Copenhagen': 'Extra',
-    'Sp Wuerfelhaus': 'Extra',
     'BabySam': 'Clothes',
-    'Magasin Du Nord': 'Extra',
+    'Boozt.com': 'Clothes',
     'Decathlon': 'Clothes',
-    'Elgiganten Danmark': 'Home Maintenance',
-    'M.A.C. Cosmetics': 'Extra',
-    '4 Urbs': 'Extra',
+    'Mango': 'Clothes',
     'Sport 24 Outlet': 'Clothes',
-    'Ladcyklen.dk - Mobile Pay': 'Services',
+    'Takko Fashion': 'Clothes',
+
+    # Eat Out
+    '7-Eleven': 'Eat Out',
+    'Baba Kebab': 'Eat Out',
+    'Bangkok Truck': 'Eat Out',
+    'Coffee Address': 'Eat Out',
+    'Copenhagen Fal': 'Eat Out',
+    'Falafelo': 'Eat Out',
+    'Falafillo': 'Eat Out',
+    'Flere Fugle': 'Eat Out',
+    'Food and Co - Novo 9P 131': 'Eat Out',
+    'Grannys House': 'Eat Out',
+    'Imi 2610 Aps': 'Eat Out',
+    'Ismageriet': 'Eat Out',
+    'Jagger - Roedovre Centrum': 'Eat Out',
+    'Jammi': 'Eat Out',
+    'Kiosk - Rsik - Ro - Mobile Pay': 'Eat Out',
+    'Kiosk - Rsik - Rºdovr': 'Eat Out',
+    'Kiosken - Rodovre - Mobile Pay': 'Eat Out',
+    'Ksf Kiosk': 'Eat Out',
+    'Lagkagehuset': 'Eat Out',
+    "McDonald's": 'Eat Out',
+    "Monop'daily": 'Eat Out',
+    'Mcdnorrebrobycenter': 'Eat Out',
+    'Oel Og Broed': 'Eat Out',
+    'Ottoman Broenshoej Aps': 'Eat Out',
+    'Restaurant Jy': 'Eat Out',
+
+    # Extra (miscellaneous purchases)
+    '4 Urbs': 'Extra',
+    'Blade by J': 'Extra',
+    'Gss Copenhagen': 'Extra',
+    'Https Www.ladcyklen.dk': 'Extra',
     'Kerstin Nellen': 'Extra',
+    'LinkedIn': 'Extra',
+    'M.A.C. Cosmetics': 'Extra',
+    'Magasin Du Nord': 'Extra',
+    'Medium': 'Extra',
+    'Royal Mermaid Amber Store': 'Extra',
+    'Simply.com': 'Extra',
     'Søstrene Grene': 'Extra',
+    'Sp Wuerfelhaus': 'Extra',
     'Thiele': 'Extra',
+
+    # Fuel
+    'Circle K': 'Fuel',
+    'Noahs Q8 Korsør': 'Fuel',
+    'Q8': 'Fuel',
+    'Shell': 'Fuel',
+    'Uno-X': 'Fuel',
+
+    # Groceries
+    'Aldi': 'Groceries',
+    'Apotek': 'Groceries',
+    'Bagt': 'Groceries',
+    'Bog & idé': 'Groceries',
+    'Carlsro Super': 'Groceries',
+    'Coop 365': 'Groceries',
+    'føtex': 'Groceries',
+    'Heinemann Denmark': 'Groceries',
+    'IKI': 'Groceries',  # Lithuanian grocery chain
+    'Ingo': 'Groceries',
+    'KaffeKapslen.dk': 'Groceries',
+    'Kvickly': 'Groceries',
+    'Lygten Bazar': 'Groceries',
+    'Lygtenbazar Aps': 'Groceries',
+    'MobilePay Danmark': 'Groceries',
+    'Nan Lygten': 'Groceries',
+    'Netto': 'Groceries',
+    'nemlig.com': 'Groceries',
+    'REMA 1000': 'Groceries',
+    'Rimi': 'Groceries',  # Baltic grocery chain
+    # Note: All Lidl stores are handled dynamically by checking for 'lidl' in the name
+
+    # Home Maintenance
+    'Bauhaus': 'Home Maintenance',  # Home improvement
+    'Elgiganten Danmark': 'Home Maintenance',
+    'IKEA': 'Home Maintenance',  # Home goods/groceries
+    'Plantorama Taas': 'Home Maintenance',  # Garden center
+    'Sportyfit Dk': 'Home Maintenance',
     'Thansen': 'Home Maintenance',
-    
+
     # Ice Hockey
     'Holdsport': 'Ice Hockey',
     'Holdsport.dk Aps': 'Ice Hockey',
     'Mette Sauffaus': 'Ice Hockey',
-    'Rexhockey': 'Ice Hockey',
     'Puk Bageri Aps': 'Ice Hockey',
+    'Rexhockey': 'Ice Hockey',
+    'Rodovre Mighty Bulls Aps': 'Ice Hockey',
+    'Roedovre Skoejte Isho': 'Ice Hockey',
     'Rsik - Kiosk': 'Ice Hockey',
     'RØDOVRE SKØJTE & I': 'Ice Hockey',
-    
+    'Skatertown Aps': 'Ice Hockey',
+    'Stine Munk': 'Ice Hockey',
+
+    # Pet Supplies
+    'Bonnie Dyrecenter Rodovre': 'Pet Supplies',
+    'Borns Vilkfr - Ba - Mobile Pay': 'Pet Supplies',
+    'Maxi Zoo': 'Pet Supplies',
+    'Themallows.dk': 'Pet Supplies',
+
+    # Services
+    'Ladcyklen.dk - Mobile Pay': 'Services',
+
     # Trip (anything outside Denmark or travel-related)
-    'Bahne': 'Trip',
-    'Knextgmbh - NYX': 'Trip',
-    'NORMAL': 'Trip',
-    'EDEKA': 'Trip',  # German supermarket
-    'Netto Marken-Discount': 'Trip',  # German Netto
-    'Eisbar Fan Eaterie Sch': 'Trip',  # German ice cream
-    'dm-drogerie': 'Trip',  # German drugstore
-    'Wild Wings Spielbetriebs': 'Trip',  # German restaurant
-    'Schulranzen.com': 'Trip',  # German online shop
-    'Eurotrade Flughafen Mue': 'Trip',  # Munich airport
-    'Deutsche Bahn': 'Trip',  # German railways
-    'Pension Sportalm': 'Trip',  # Austrian accommodation
-    'Werkstatt Soelden': 'Trip',  # Austrian ski resort
-    'EUROSPAR': 'Trip',  # Austrian supermarket
     'Backstuba': 'Trip',  # Austrian bakery
-    'Mountaincarts Solden': 'Trip',  # Austrian activity
-    'Schiregion Hochoetz': 'Trip',  # Austrian ski area
-    'Turkish Airlines': 'Trip',
-    'Freizeit Arena': 'Trip',  # Austrian facility
-    'Sport Riml': 'Trip',  # Austrian sports shop
-    'Parksaeule Freizeit Arena': 'Trip',  # Austrian parking
-    'MPREIS': 'Trip',  # Austrian supermarket
-    'Hauptfiliale Soelde': 'Trip',  # Austrian bank
-    'Tankstelle Kapferia': 'Trip',  # Austrian gas station
-    'Panorama Restaurant': 'Trip',  # Austrian restaurant
-    'Dr Hermann Koehle': 'Trip',  # Austrian doctor
-    'Oetztal Baeck': 'Trip',  # Austrian bakery
-    'Raststaette Inntal West': 'Trip',  # Austrian rest stop
-    'Müller': 'Trip',  # German drugstore chain
-    'Sparda-Banken': 'Trip',  # German bank
-    'Stadtsparkasse München - Geldautomat': 'Trip',  # Munich ATM
-    'Drivers Inn': 'Trip',  # German hotel chain
-    'Kaufland': 'Trip',  # German supermarket
-    'FC Bayern München': 'Trip',  # Munich football
-    'MVG': 'Trip',  # Munich transport
+    'Bahne': 'Trip',
     'Beerencafe': 'Trip',  # German cafe
-    'Kaefer Autowelt': 'Trip',  # German car dealer
-    'Ehc Red Bull Munchen': 'Trip',  # Munich hockey
-    'PEP': 'Trip',  # German fashion
-    'Intersport Siebzehnrübl': 'Trip',  # German sports shop
-    'Tankstelle Rostock': 'Trip',  # German gas station
-    'MLCraft': 'Trip',  # German company
-    'Scandlines': 'Trip',  # Ferry service
-    'Neh Svenska Ab': 'Trip',  # Swedish company
-    'Katpedele': 'Trip',  # Lithuanian company
     'Bolt': 'Trip',  # Ride sharing (often used abroad)
-    'Uab Ltg Link Vilnius': 'Trip',  # Lithuanian transport
-    'Uab Ltg Link Kaunas': 'Trip',  # Lithuanian transport
-    'Odontolog. Klinika Odonti': 'Trip',  # Lithuanian dentist
     'Booking.com': 'Trip',  # Travel booking
-    'Ryanair': 'Trip',  # Airline
-    'Travelis Denmark': 'Trip',  # Travel agency
-    'Legoland': 'Trip',  # Theme park (could be trip)
-    'Lalandia': 'Trip',  # Resort (could be trip)
+    'Brobizz': 'Trip',  # Bridge tolls for car
+    'Deutsche Bahn': 'Trip',  # German railways
+    'Dr Hermann Koehle': 'Trip',  # Austrian doctor
+    'Drivers Inn': 'Trip',  # German hotel chain
+    'EDEKA': 'Trip',  # German supermarket
+    'Ehc Red Bull Munchen': 'Trip',  # Munich hockey
+    'Eisbar Fan Eaterie Sch': 'Trip',  # German ice cream
     'Enjoy by Lillebaelt Nord': 'Trip',  # Rest stop
-    
-    # Entertainment
-    'Planetarium': 'Entertainment',
+    'EUROSPAR': 'Trip',  # Austrian supermarket
+    'Eurotrade Flughafen Mue': 'Trip',  # Munich airport
+    'FC Bayern München': 'Trip',  # Munich football
+    'Freizeit Arena': 'Trip',  # Austrian facility
+    'Hauptfiliale Soelde': 'Trip',  # Austrian bank
+    'Intersport Siebzehnrübl': 'Trip',  # German sports shop
+    'Kaefer Autowelt': 'Trip',  # German car dealer
+    'Katpedele': 'Trip',  # Lithuanian company
+    'Kaufland': 'Trip',  # German supermarket
+    'Knextgmbh - NYX': 'Trip',
+    'Lalandia': 'Trip',  # Resort (could be trip)
+    'Legoland': 'Trip',  # Theme park (could be trip)
+    'MLCraft': 'Trip',  # German company
+    'MPREIS': 'Trip',  # Austrian supermarket
+    'Mountaincarts Solden': 'Trip',  # Austrian activity
+    'MVG': 'Trip',  # Munich transport
+    'Müller': 'Trip',  # German drugstore chain
+    'Neh Svenska Ab': 'Trip',  # Swedish company
+    'Netto Marken-Discount': 'Trip',  # German Netto
+    'NORMAL': 'Trip',
+    'Odontolog. Klinika Odonti': 'Trip',  # Lithuanian dentist
+    'Oetztal Baeck': 'Trip',  # Austrian bakery
+    'Panorama Restaurant': 'Trip',  # Austrian restaurant
+    'Parksaeule Freizeit Arena': 'Trip',  # Austrian parking
+    'PEP': 'Trip',  # German fashion
+    'Pension Sportalm': 'Trip',  # Austrian accommodation
+    'Raststaette Inntal West': 'Trip',  # Austrian rest stop
+    'Ryanair': 'Trip',  # Airline
+    'Scandlines': 'Trip',  # Ferry service
+    'Schiregion Hochoetz': 'Trip',  # Austrian ski area
+    'Schulranzen.com': 'Trip',  # German online shop
+    'Sparda-Banken': 'Trip',  # German bank
+    'Sport Riml': 'Trip',  # Austrian sports shop
+    'Stadtsparkasse München - Geldautomat': 'Trip',  # Munich ATM
+    'Travelis Denmark': 'Trip',  # Travel agency
+    'Turkish Airlines': 'Trip',
+    'Uab Ltg Link Kaunas': 'Trip',  # Lithuanian transport
+    'Uab Ltg Link Vilnius': 'Trip',  # Lithuanian transport
+    'Werkstatt Soelden': 'Trip',  # Austrian ski resort
+
+    # Trip-Fuel
+    'Aral': 'Trip-Fuel',
+    'Esso': 'Trip-Fuel',
 }
 
 # Monthly Budget Limits Configuration
