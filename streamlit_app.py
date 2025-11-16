@@ -92,13 +92,13 @@ def require_auth() -> bool:
         cfg_username = os.environ.get("APP_USERNAME") or st.secrets.get("APP_USERNAME")
         needs_username = bool(cfg_username and str(cfg_username).strip())
         
-        # Debug info (remove after fixing)
-        with st.expander("🔍 Debug Info", expanded=False):
-            st.write(f"Username required: {needs_username}")
-            st.write(f"ENV APP_USERNAME set: {bool(os.environ.get('APP_USERNAME'))}")
-            st.write(f"ENV APP_PASSWORD set: {bool(os.environ.get('APP_PASSWORD'))}")
-            st.write(f"Secrets APP_USERNAME set: {bool(st.secrets.get('APP_USERNAME'))}")
-            st.write(f"Secrets APP_PASSWORD set: {bool(st.secrets.get('APP_PASSWORD'))}")
+        # # Debug info (remove after fixing)
+        # with st.expander("🔍 Debug Info", expanded=False):
+        #     st.write(f"Username required: {needs_username}")
+        #     st.write(f"ENV APP_USERNAME set: {bool(os.environ.get('APP_USERNAME'))}")
+        #     st.write(f"ENV APP_PASSWORD set: {bool(os.environ.get('APP_PASSWORD'))}")
+        #     st.write(f"Secrets APP_USERNAME set: {bool(st.secrets.get('APP_USERNAME'))}")
+        #     st.write(f"Secrets APP_PASSWORD set: {bool(st.secrets.get('APP_PASSWORD'))}")
         
         user = st.text_input("Username", value="", disabled=not needs_username, placeholder="username" if needs_username else "not required", key="login_username")
         pwd = st.text_input("Password", type="password", placeholder="Your password", key="login_password")
