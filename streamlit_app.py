@@ -53,20 +53,12 @@ def _verify_pbkdf2(password: str, salt_hex: str, hash_hex: str, iterations: int 
 
 
 def _check_credentials(input_user: str | None, input_pass: str) -> bool:
-    secrets = st.secrets
-    cfg_user = secrets.get("APP_USERNAME")
-    cfg_pass = secrets.get("APP_PASSWORD")
-    cfg_hash = secrets.get("APP_PASSWORD_HASH")
-    cfg_salt = secrets.get("APP_PASSWORD_SALT")
-    cfg_iter = secrets.get("APP_PASSWORD_ITERATIONS", 150000)
-
-    # Fallback to env vars (useful for local dev)
-    if cfg_pass is None and cfg_hash is None:
-        cfg_user = cfg_user or os.environ.get("APP_USERNAME")
-        cfg_pass = os.environ.get("APP_PASSWORD")
-        cfg_hash = os.environ.get("APP_PASSWORD_HASH")
-        cfg_salt = os.environ.get("APP_PASSWORD_SALT")
-        cfg_iter = os.environ.get("APP_PASSWORD_ITERATIONS", cfg_iter)
+    # Try environment variables first (Streamlit Cloud), then fall back to secrets (local dev)
+    cfg_user = os.environ.get("APP_USERNAME") or st.secrets.get("APP_USERNAME")
+    cfg_pass = os.environ.get("APP_PASSWORD") or st.secrets.get("APP_PASSWORD")
+    cfg_hash = os.environ.get("APP_PASSWORD_HASH") or st.secrets.get("APP_PASSWORD_HASH")
+    cfg_salt = os.environ.get("APP_PASSWORD_SALT") or st.secrets.get("APP_PASSWORD_SALT")
+    cfg_iter = os.environ.get("APP_PASSWORD_ITERATIONS") or st.secrets.get("APP_PASSWORD_ITERATIONS", 150000)
 
     # Normalize config values (strip whitespace and convert empty strings to None)
     cfg_user = str(cfg_user).strip() if cfg_user else None
@@ -96,15 +88,17 @@ def require_auth() -> bool:
     st.info("This app is protected. Enter credentials to continue.")
 
     with st.form("login_form", clear_on_submit=False):
-        # Check if username is configured (must be non-empty string)
-        cfg_username = st.secrets.get("APP_USERNAME") or os.environ.get("APP_USERNAME")
+        # Check if username is configured (try env vars first, then secrets)
+        cfg_username = os.environ.get("APP_USERNAME") or st.secrets.get("APP_USERNAME")
         needs_username = bool(cfg_username and str(cfg_username).strip())
         
         # Debug info (remove after fixing)
         with st.expander("🔍 Debug Info", expanded=False):
             st.write(f"Username required: {needs_username}")
-            st.write(f"Secrets keys available: {list(st.secrets.keys())}")
-            st.write(f"APP_PASSWORD configured: {bool(st.secrets.get('APP_PASSWORD'))}")
+            st.write(f"ENV APP_USERNAME set: {bool(os.environ.get('APP_USERNAME'))}")
+            st.write(f"ENV APP_PASSWORD set: {bool(os.environ.get('APP_PASSWORD'))}")
+            st.write(f"Secrets APP_USERNAME set: {bool(st.secrets.get('APP_USERNAME'))}")
+            st.write(f"Secrets APP_PASSWORD set: {bool(st.secrets.get('APP_PASSWORD'))}")
         
         user = st.text_input("Username", value="", disabled=not needs_username, placeholder="username" if needs_username else "not required", key="login_username")
         pwd = st.text_input("Password", type="password", placeholder="Your password", key="login_password")
