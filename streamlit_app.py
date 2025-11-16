@@ -89,9 +89,12 @@ def require_auth() -> bool:
     st.info("This app is protected. Enter credentials to continue.")
 
     with st.form("login_form", clear_on_submit=False):
-        needs_username = st.secrets.get("APP_USERNAME") is not None or os.environ.get("APP_USERNAME") is not None
-        user = st.text_input("Username", value="" if needs_username else "", disabled=not needs_username, placeholder="username" if needs_username else None)
-        pwd = st.text_input("Password", type="password", placeholder="Your password")
+        # Check if username is configured (must be non-empty string)
+        cfg_username = st.secrets.get("APP_USERNAME") or os.environ.get("APP_USERNAME")
+        needs_username = bool(cfg_username and str(cfg_username).strip())
+        
+        user = st.text_input("Username", value="", disabled=not needs_username, placeholder="username" if needs_username else "not required", key="login_username")
+        pwd = st.text_input("Password", type="password", placeholder="Your password", key="login_password")
         submitted = st.form_submit_button("Log in")
 
     if submitted:
