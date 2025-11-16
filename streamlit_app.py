@@ -61,13 +61,13 @@ def _check_credentials(input_user: str | None, input_pass: str) -> bool:
     cfg_iter = os.environ.get("APP_PASSWORD_ITERATIONS") or st.secrets.get("APP_PASSWORD_ITERATIONS", 150000)
 
     # Normalize config values (strip whitespace and convert empty strings to None)
-    cfg_user = str(cfg_user).strip() if cfg_user else None
+    cfg_user = str(cfg_user).strip().lower() if cfg_user else None
     cfg_pass = str(cfg_pass).strip() if cfg_pass else None
     cfg_hash = str(cfg_hash).strip() if cfg_hash else None
     cfg_salt = str(cfg_salt).strip() if cfg_salt else None
 
-    # Require username match if configured
-    if cfg_user and (input_user or "").strip() != cfg_user:
+    # Require username match if configured (case-insensitive)
+    if cfg_user and (input_user or "").strip().lower() != cfg_user:
         return False
 
     # Verify password
