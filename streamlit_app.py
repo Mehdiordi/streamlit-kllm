@@ -68,14 +68,21 @@ def _check_credentials(input_user: str | None, input_pass: str) -> bool:
         cfg_salt = os.environ.get("APP_PASSWORD_SALT")
         cfg_iter = os.environ.get("APP_PASSWORD_ITERATIONS", cfg_iter)
 
+    # Normalize config values (strip whitespace and convert empty strings to None)
+    cfg_user = str(cfg_user).strip() if cfg_user else None
+    cfg_pass = str(cfg_pass).strip() if cfg_pass else None
+    cfg_hash = str(cfg_hash).strip() if cfg_hash else None
+    cfg_salt = str(cfg_salt).strip() if cfg_salt else None
+
     # Require username match if configured
-    if cfg_user is not None and (input_user or "").strip() != str(cfg_user).strip():
+    if cfg_user and (input_user or "").strip() != cfg_user:
         return False
 
+    # Verify password
     if cfg_hash and cfg_salt:
         return _verify_pbkdf2(input_pass or "", cfg_salt, cfg_hash, int(cfg_iter))
-    elif cfg_pass is not None:
-        return str(input_pass or "") == str(cfg_pass)
+    elif cfg_pass:
+        return str(input_pass or "") == cfg_pass
     else:
         # No credentials configured -> deny to avoid accidental public exposure
         return False
@@ -92,6 +99,12 @@ def require_auth() -> bool:
         # Check if username is configured (must be non-empty string)
         cfg_username = st.secrets.get("APP_USERNAME") or os.environ.get("APP_USERNAME")
         needs_username = bool(cfg_username and str(cfg_username).strip())
+        
+        # Debug info (remove after fixing)
+        with st.expander("🔍 Debug Info", expanded=False):
+            st.write(f"Username required: {needs_username}")
+            st.write(f"Secrets keys available: {list(st.secrets.keys())}")
+            st.write(f"APP_PASSWORD configured: {bool(st.secrets.get('APP_PASSWORD'))}")
         
         user = st.text_input("Username", value="", disabled=not needs_username, placeholder="username" if needs_username else "not required", key="login_username")
         pwd = st.text_input("Password", type="password", placeholder="Your password", key="login_password")
