@@ -9,6 +9,8 @@ import boto3
 import io
 from botocore.exceptions import ClientError
 import pytz
+import hashlib
+import os
 
 # Suppress noisy but non-actionable warnings that clutter the terminal while
 # Streamlit is running. These are display/deprecation warnings only and do
@@ -27,6 +29,92 @@ warnings.filterwarnings('ignore', category=DeprecationWarning, message=r".*Bitwi
 from config import personal_categories, get_monthly_limit
 
 st.set_page_config(page_title=" Budget Tracker", layout="wide")
+
+# -----------------------------------------------------------------------------
+# Simple access protection for Streamlit Community Cloud
+# - Set the following in your Streamlit secrets (Share -> Manage app -> Secrets):
+#   APP_PASSWORD: "your-strong-password"
+#   (optional) APP_USERNAME: "yourname"  # if set, login requires username too
+# - Optionally, use hashed storage instead of plaintext:
+#   APP_PASSWORD_HASH: hex-encoded PBKDF2-HMAC-SHA256 hash
+#   APP_PASSWORD_SALT: hex-encoded random salt used for the hash
+#   APP_PASSWORD_ITERATIONS: e.g., 200000 (default 150000)
+# If no password is configured, the app refuses to run (to avoid accidental exposure).
+# -----------------------------------------------------------------------------
+
+def _verify_pbkdf2(password: str, salt_hex: str, hash_hex: str, iterations: int = 150000) -> bool:
+    try:
+        salt = bytes.fromhex(str(salt_hex))
+        expected = bytes.fromhex(str(hash_hex))
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, int(iterations or 150000))
+        return hashlib.compare_digest(dk, expected)
+    except Exception:
+        return False
+
+
+def _check_credentials(input_user: str | None, input_pass: str) -> bool:
+    secrets = st.secrets
+    cfg_user = secrets.get("APP_USERNAME")
+    cfg_pass = secrets.get("APP_PASSWORD")
+    cfg_hash = secrets.get("APP_PASSWORD_HASH")
+    cfg_salt = secrets.get("APP_PASSWORD_SALT")
+    cfg_iter = secrets.get("APP_PASSWORD_ITERATIONS", 150000)
+
+    # Fallback to env vars (useful for local dev)
+    if cfg_pass is None and cfg_hash is None:
+        cfg_user = cfg_user or os.environ.get("APP_USERNAME")
+        cfg_pass = os.environ.get("APP_PASSWORD")
+        cfg_hash = os.environ.get("APP_PASSWORD_HASH")
+        cfg_salt = os.environ.get("APP_PASSWORD_SALT")
+        cfg_iter = os.environ.get("APP_PASSWORD_ITERATIONS", cfg_iter)
+
+    # Require username match if configured
+    if cfg_user is not None and (input_user or "").strip() != str(cfg_user).strip():
+        return False
+
+    if cfg_hash and cfg_salt:
+        return _verify_pbkdf2(input_pass or "", cfg_salt, cfg_hash, int(cfg_iter))
+    elif cfg_pass is not None:
+        return str(input_pass or "") == str(cfg_pass)
+    else:
+        # No credentials configured -> deny to avoid accidental public exposure
+        return False
+
+
+def require_auth() -> bool:
+    if st.session_state.get("__auth_ok__"):
+        return True
+
+    st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
+    st.info("This app is protected. Enter credentials to continue.")
+
+    with st.form("login_form", clear_on_submit=False):
+        needs_username = st.secrets.get("APP_USERNAME") is not None or os.environ.get("APP_USERNAME") is not None
+        user = st.text_input("Username", value="" if needs_username else "", disabled=not needs_username, placeholder="username" if needs_username else None)
+        pwd = st.text_input("Password", type="password", placeholder="Your password")
+        submitted = st.form_submit_button("Log in")
+
+    if submitted:
+        if _check_credentials(user if needs_username else None, pwd):
+            st.session_state["__auth_ok__"] = True
+            st.success("Logged in!")
+            # Streamlit >=1.29: experimental_rerun deprecated; use st.rerun()
+            try:
+                st.rerun()
+            except AttributeError:
+                # Fallback for older versions where st.rerun may not exist
+                st.experimental_rerun()
+        else:
+            st.error("Invalid credentials")
+
+    # Don’t render the rest of the app until authenticated
+    return False
+
+
+if not require_auth():
+    st.stop()
+
+st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"__auth_ok__": False}))
 st.markdown("<h1 style='margin:0 0 8px 0'>🏠 Budget Tracker</h1>", unsafe_allow_html=True)
 
 st.sidebar.header("Data / Limits")
@@ -410,7 +498,10 @@ try:
         st.session_state["weekly_limit_input"] = round(float(applied_monthly_limit) / 4.33, 2)
         st.session_state["limits_synced_from_config"] = True
         # Rerun so Streamlit will render the widgets with the updated values.
-        st.experimental_rerun()
+        try:
+            st.rerun()
+        except AttributeError:
+            st.experimental_rerun()
     else:
         # Ensure local weekly_limit reflects the widget/session state
         try:
