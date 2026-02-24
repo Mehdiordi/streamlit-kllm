@@ -59,6 +59,8 @@ EXPENSE_CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "nemlig",
             "nemlig.com",
             "wolt market",
+            "Kaffekapslen",
+            "Mob.pay Nan Lygten",
         ],
     ),
     (
@@ -179,6 +181,9 @@ EXPENSE_CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "apple",
             "store",
             "shop",
+            "Zalando Payments",
+            "JYSK",
+            "Nike",
         ],
     ),
     (
@@ -222,6 +227,7 @@ EXPENSE_CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "tandlæge",
             "tandlaege",
             "hospital",
+            "Comfortclic",
         ],
     ),
     (
@@ -269,6 +275,7 @@ EXPENSE_CATEGORY_RULES: list[tuple[str, list[str]]] = [
             "concert",
             "museum",
             "game",
+            "Fafla Mikroverk",
         ],
     ),
     (

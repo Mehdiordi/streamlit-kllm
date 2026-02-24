@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
-from processing import PreparedData, prepare_data_for_plotting
-
-
-CSV_PATH_DEFAULT = "data/account-statement_2025-11-28_2026-02-07_en-us_a19b3a.csv"
+from processing import (
+    PreparedData,
+    cleanup_outdated_account_statement_csvs,
+    find_latest_account_statement_csv,
+    prepare_data_for_plotting,
+)
 
 
 def fmt_dkk(x: float) -> str:
@@ -34,22 +37,66 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     inc_total = float(totals_by_month.loc[month, "income"]) if month in totals_by_month.index else 0.0
     ref_total = float(totals_by_month.loc[month, "refund"]) if month in totals_by_month.index else 0.0
 
-    title = (
-        f"{month_label} "
-        f"EXPENSE {fmt_dkk(exp_total)} | "
-        f"INCOME {fmt_dkk(inc_total)} | "
-        f"REFUND {fmt_dkk(ref_total)}"
-    )
+    title = f"{month_label}"
 
-    fig_h = max(3.5, 0.35 * len(s))
-    fig, ax = plt.subplots(figsize=(10, fig_h))
-    ax.barh(s.index.astype(str), s.values)
+    # Style to match the desired dark dashboard look
+    bg = "#0e1117"  # Streamlit dark-ish background
+    fg = "#e5e7eb"  # light text
+    grid = "#374151"  # subtle grid
+    bar = "#621b09"  # red bars
+
+    fig_h = max(3.0, 0.33 * len(s))
+    fig, ax = plt.subplots(figsize=(5.8, fig_h), dpi=120)
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+
+    bars = ax.barh(s.index.astype(str), s.values, color=bar)
     ax.invert_yaxis()
-    ax.set_title(title)
-    ax.set_xlabel("DKK")
-    ax.set_ylabel("Category")
-    ax.set_xlim(left=0)
-    ax.grid(True, axis="x", alpha=0.3)
+    ax.set_title(title, loc="left", fontsize=10.5, color=fg, fontweight="bold", pad=6)
+    ax.set_xlabel("DKK", color=fg, fontsize=9)
+    ax.set_ylabel("")
+
+    # Axes / ticks
+    ax.tick_params(axis="x", colors=fg, labelsize=8)
+    ax.tick_params(axis="y", colors=fg, labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    max_val = float(np.nanmax(s.values)) if len(s.values) else 0.0
+    ax.set_xlim(0, max(1.0, max_val * 1.12))
+    ax.grid(True, axis="x", color=grid, alpha=0.35, linewidth=0.8)
+    ax.set_axisbelow(True)
+
+    # Value labels (on/near the end of each bar)
+    pad_inside = max_val * 0.02
+    pad_outside = max_val * 0.015
+    for b in bars:
+        w = float(b.get_width())
+        y = float(b.get_y() + b.get_height() / 2)
+        label = fmt_dkk(w)
+        if max_val > 0 and w >= max_val * 0.12:
+            ax.text(
+                w - pad_inside,
+                y,
+                label,
+                va="center",
+                ha="right",
+                color="#fde047",  # yellow
+                fontsize=8.5,
+                fontweight="bold",
+            )
+        else:
+            ax.text(
+                w + pad_outside,
+                y,
+                label,
+                va="center",
+                ha="left",
+                color=fg,
+                fontsize=8.5,
+                fontweight="bold",
+            )
+
     plt.tight_layout()
     st.pyplot(fig, clear_figure=True)
 
@@ -62,9 +109,9 @@ def month_totals(totals_by_month: pd.DataFrame, month: str) -> tuple[float, floa
 
 
 def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int) -> None:
-    # Compact caption-style header (small text) like: 🐝 5 DKK | 🥇 0 DKK | 🟢 0 DKK | 📊 1
+    # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1
     st.caption(
-        f"🐝 {fmt_dkk(exp_total)} DKK | 🥇 {fmt_dkk(inc_total)} DKK | 🟢 {fmt_dkk(ref_total)} DKK | 📊 {items}"
+        f"💸 {fmt_dkk(exp_total)} DKK | 💰 {fmt_dkk(inc_total)} DKK | ♻️ {fmt_dkk(ref_total)} DKK | 📊 {items}"
     )
 
 
@@ -96,9 +143,17 @@ def expenses_table_for_month(df: pd.DataFrame, month: str) -> pd.DataFrame:
 def main():
     st.set_page_config(page_title="Revolut expenses", layout="wide")
 
-    st.title("Revolut account statement – quick view")
+    st.title("Revolut statement")
 
-    csv_path = CSV_PATH_DEFAULT
+    try:
+        csv_path = find_latest_account_statement_csv("data")
+    except Exception as e:
+        st.error(str(e))
+        return
+
+    # Keep workspace tidy: delete older account-statement CSVs.
+    cleanup_outdated_account_statement_csvs("data", keep_path=csv_path)
+
     st.caption(f"CSV: {csv_path}")
 
     prepared = load_prepared(csv_path)
@@ -126,7 +181,7 @@ def main():
                 st.dataframe(
                     exp_table,
                     use_container_width=True,
-                    height=210,
+                    height=290,
                     hide_index=True,
                 )
 

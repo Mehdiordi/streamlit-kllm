@@ -12,6 +12,7 @@ This module mirrors the notebook pipeline in 01_visualize_df.ipynb:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import importlib
 import logging
 import re
@@ -26,6 +27,84 @@ import requests
 import config
 
 logger = logging.getLogger(__name__)
+
+
+def find_latest_account_statement_csv(search_dir: str = "data") -> str:
+    """Pick the most recent Revolut export CSV containing 'account-statement'.
+
+    Preference order:
+    1) Newest date found in filename (typically the end date in Revolut exports)
+    2) Newest file modified time as a fallback
+    """
+
+    base = Path(search_dir)
+    if not base.exists() or not base.is_dir():
+        raise FileNotFoundError(f"Folder not found: {base}")
+
+    candidates = [p for p in base.glob("*.csv") if "account-statement" in p.name]
+    if not candidates:
+        raise FileNotFoundError(f"No CSV files containing 'account-statement' in {base}")
+
+    date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+    def sort_key(p: Path):
+        dates = date_re.findall(p.name)
+        parsed = [pd.to_datetime(d, errors="coerce").date() for d in dates]
+        parsed = [d for d in parsed if d is not None and not pd.isna(d)]
+        end_date = parsed[-1] if parsed else None
+        start_date = parsed[0] if parsed else None
+        mtime = p.stat().st_mtime
+        # None-safe sorting: use very old date when missing
+        end_dt = end_date or pd.Timestamp("1900-01-01").date()
+        start_dt = start_date or pd.Timestamp("1900-01-01").date()
+        return (end_dt, start_dt, mtime)
+
+    best = sorted(candidates, key=sort_key, reverse=True)[0]
+    return str(best.as_posix())
+
+
+def cleanup_outdated_account_statement_csvs(
+    search_dir: str = "data",
+    keep_path: str | None = None,
+    prefix: str = "account-statement",
+) -> list[str]:
+    """Remove older account-statement CSVs from search_dir.
+
+    Only deletes files inside search_dir whose names start with `prefix` and end with `.csv`.
+    Returns a list of deleted file paths.
+    """
+
+    base = Path(search_dir)
+    if not base.exists() or not base.is_dir():
+        return []
+
+    keep_resolved = None
+    if keep_path:
+        try:
+            keep_resolved = Path(keep_path).resolve()
+        except Exception:
+            keep_resolved = None
+
+    deleted: list[str] = []
+    for p in base.glob("*.csv"):
+        if not p.name.startswith(prefix):
+            continue
+        if keep_resolved is not None:
+            try:
+                if p.resolve() == keep_resolved:
+                    continue
+            except Exception:
+                # If resolve fails, fall back to string compare.
+                if str(p) == keep_path:
+                    continue
+
+        try:
+            p.unlink()
+            deleted.append(str(p.as_posix()))
+        except Exception as e:
+            logger.warning(f"Failed to delete outdated CSV {p}: {e}")
+
+    return deleted
 
 
 def to_snake(name: str) -> str:
@@ -171,6 +250,7 @@ def fx_rate_on_date(
         return None, None
 
     d = pd.Timestamp(date).date()
+    last_error: Optional[Exception] = None
     for attempt in range(max_backtrack_days + 1):
         key = (str(d), from_ccy, to_ccy)
         if key in _cache:
@@ -186,15 +266,18 @@ def fx_rate_on_date(
                 used_date = pd.to_datetime(api_date_str).date() if api_date_str else d
                 _cache[key] = (rate, used_date)
                 return rate, used_date
-        except Exception:
-            logger.warning(
-                f"Failed to fetch FX rate for {from_ccy}->{to_ccy} on {d} "
-                f"(attempt {attempt+1}/{max_backtrack_days+1})"
-            )
+        except Exception as e:
+            # Streamlit runs this frequently; keep logs quiet during transient network issues.
+            last_error = e
 
         d = (pd.Timestamp(d) - pd.Timedelta(days=1)).date()
         time.sleep(0.05)
 
+    if last_error is not None:
+        logger.warning(
+            f"Failed to fetch FX rate for {from_ccy}->{to_ccy} starting at {pd.Timestamp(date).date()} "
+            f"after {max_backtrack_days+1} attempts. Last error: {last_error}"
+        )
     return None, None
 
 
