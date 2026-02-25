@@ -15,9 +15,12 @@ from dataclasses import dataclass
 from datetime import date as Date
 from pathlib import Path
 import calendar
+import csv
+from datetime import datetime
 import logging
 import re
 import unicodedata
+from uuid import uuid4
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
@@ -29,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EXPENSE_CATEGORY = "Other"
 EXPENSE_CATEGORY_MAP_PATH = Path(__file__).with_name("expense_categories.yml")
+
+MANUAL_EXPENSES_FILENAME = "manual_expenses.csv"
+MANUAL_EXTERNAL_SUFFIX = "-External"
 
 
 _expense_config_cache: dict[Path, tuple[float, dict[str, str], dict[int, float]]] = {}
@@ -456,13 +462,159 @@ def categorize_expenses(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     is_expense = out["type"].astype(str).str.casefold().eq("expense")
 
-    out["category"] = pd.NA
+    if "category" not in out.columns:
+        out["category"] = pd.NA
+
     if "description" in out.columns:
-        out.loc[is_expense, "category"] = out.loc[is_expense, "description"].apply(
+        to_fill = is_expense & out["category"].isna()
+        out.loc[to_fill, "category"] = out.loc[to_fill, "description"].apply(
             category_from_description
         )
 
     return out
+
+
+def manual_expenses_path(data_dir: str | Path = "data") -> Path:
+    return Path(data_dir) / MANUAL_EXPENSES_FILENAME
+
+
+def _ensure_external_suffix(description: object) -> str:
+    s = "" if description is None else str(description)
+    s = s.strip()
+    if not s:
+        return s
+    if s.casefold().endswith(MANUAL_EXTERNAL_SUFFIX.casefold()):
+        return s
+    return s + MANUAL_EXTERNAL_SUFFIX
+
+
+def load_manual_expenses(data_dir: str | Path = "data") -> pd.DataFrame:
+    """Load manually-entered expenses from a persistent CSV.
+
+    Expected columns (flexible):
+    - completed_date (required)
+    - description (required)
+    - amount_net OR amount_dkk (required)
+    - currency (optional; defaults to DKK)
+    - category (optional)
+
+    Returned rows are normalized to the main pipeline schema with:
+    - type = 'expense'
+    - sub_type = 'Manual'
+    - fee = 0
+    - source = 'manual'
+    """
+
+    p = manual_expenses_path(data_dir)
+    if not p.exists():
+        return pd.DataFrame()
+
+    try:
+        raw = pd.read_csv(p)
+    except Exception:
+        return pd.DataFrame()
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    df = raw.copy()
+    # Normalize column names to snake_case to be forgiving
+    df.columns = [to_snake(c) for c in df.columns]
+
+    if "completed_date" not in df.columns or "description" not in df.columns:
+        return pd.DataFrame()
+
+    df["completed_date"] = pd.to_datetime(df["completed_date"], errors="coerce")
+    df["description"] = df["description"].where(df["description"].notna(), "")
+    df["description"] = df["description"].astype(str).map(_ensure_external_suffix)
+
+    # Accept either amount_net or amount_dkk
+    if "amount_net" not in df.columns:
+        if "amount_dkk" in df.columns:
+            df["amount_net"] = df["amount_dkk"]
+        elif "amount" in df.columns:
+            df["amount_net"] = df["amount"]
+        else:
+            return pd.DataFrame()
+
+    df["amount_net"] = pd.to_numeric(df["amount_net"], errors="coerce")
+
+    # Manual entries are expenses: store as negative net amount for consistency.
+    df.loc[df["amount_net"].notna(), "amount_net"] = -df.loc[df["amount_net"].notna(), "amount_net"].abs()
+
+    if "currency" not in df.columns:
+        df["currency"] = "DKK"
+    df["currency"] = df["currency"].astype(str).str.upper().str.strip().replace({"": "DKK"})
+    df.loc[df["currency"].isna(), "currency"] = "DKK"
+
+    # Manual expenses should not be keyword-categorized; trust the provided category.
+    # If missing/blank, default to DEFAULT_EXPENSE_CATEGORY.
+    if "category" in df.columns:
+        df["category"] = df["category"].where(df["category"].notna(), "")
+        df["category"] = df["category"].astype(str).map(lambda s: s.strip())
+        df.loc[df["category"].eq(""), "category"] = DEFAULT_EXPENSE_CATEGORY
+    else:
+        df["category"] = DEFAULT_EXPENSE_CATEGORY
+
+    # Fill required/expected columns for the rest of the pipeline
+    df["type"] = "expense"
+    df["sub_type"] = df.get("sub_type", "Manual")
+    df["fee"] = 0.0
+    df["source"] = "manual"
+
+    keep_cols = [
+        c
+        for c in [
+            "completed_date",
+            "started_date",
+            "sub_type",
+            "description",
+            "amount_net",
+            "fee",
+            "currency",
+            "type",
+            "category",
+            "source",
+        ]
+        if c in df.columns
+    ]
+    df = df[keep_cols].copy()
+    df = df[df["completed_date"].notna() & df["amount_net"].notna()].copy()
+    return df
+
+
+def append_manual_expense(
+    *,
+    data_dir: str | Path = "data",
+    completed_date: Date,
+    description: str,
+    amount_dkk: float,
+    category: str | None = None,
+) -> Path:
+    """Append one manual expense to the persistent CSV and return the path."""
+
+    p = manual_expenses_path(data_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    row = {
+        "id": str(uuid4()),
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "completed_date": str(completed_date),
+        "description": _ensure_external_suffix(description),
+        # Store as positive spend in file; loader converts to negative amount_net
+        "amount_dkk": float(abs(amount_dkk)),
+        "currency": "DKK",
+        "category": (str(category).strip() if category else ""),
+    }
+
+    write_header = not p.exists() or p.stat().st_size == 0
+    with p.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+
+    return p
 
 
 def fx_rate_on_date(
@@ -578,12 +730,17 @@ class PreparedData:
     other_expenses: pd.DataFrame
 
 
-def prepare_data_for_plotting(csv_path: str) -> PreparedData:
+def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data") -> PreparedData:
     """End-to-end prep used by Streamlit plotting."""
 
     raw = load_revolut_csv(csv_path)
     df = normalize_revolut_df(raw)
     df["type"] = classify_type(df)
+
+    manual = load_manual_expenses(manual_data_dir)
+    if not manual.empty:
+        df = pd.concat([df, manual], ignore_index=True, sort=False)
+
     df = categorize_expenses(df)
     df = convert_to_dkk(df)
 

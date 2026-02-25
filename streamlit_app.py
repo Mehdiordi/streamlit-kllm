@@ -8,8 +8,11 @@ import streamlit as st
 from fx_cache import FxCacheBackgroundUpdater, ensure_fx_cache_files, fx_cache_version
 from processing import (
     PreparedData,
+    append_manual_expense,
     cleanup_outdated_account_statement_csvs,
     find_latest_account_statement_csv,
+    load_expense_category_map,
+    load_manual_expenses,
     load_monthly_limits,
     prepare_data_for_plotting,
 )
@@ -20,8 +23,28 @@ def fmt_dkk(x: float) -> str:
 
 
 @st.cache_data(show_spinner=True)
-def load_prepared(csv_path: str, fx_version: float) -> PreparedData:
-    return prepare_data_for_plotting(csv_path)
+def load_prepared(csv_path: str, fx_version: float, manual_version: float) -> PreparedData:
+    # manual_version exists purely to invalidate the cache when manual_expenses.csv changes
+    _ = manual_version
+    return prepare_data_for_plotting(csv_path, manual_data_dir="data")
+
+
+def manual_expenses_version(data_dir: str = "data") -> float:
+    try:
+        import os
+
+        p = os.path.join(data_dir, "manual_expenses.csv")
+        return os.path.getmtime(p) if os.path.exists(p) else 0.0
+    except Exception:
+        return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def category_options() -> list[str]:
+    # unique categories from YAML mapping
+    compiled = load_expense_category_map()
+    cats = sorted({cat for _kw, cat in compiled if cat})
+    return cats
 
 
 @st.cache_resource
@@ -302,6 +325,7 @@ def main():
         ensure_fx_cache_files(data_dir="data")
 
     fx_version = fx_cache_version(data_dir="data")
+    manual_version = manual_expenses_version(data_dir="data")
 
     # Background refresh: updates cache to today's date without blocking the UI.
     updater = fx_background_updater()
@@ -312,7 +336,7 @@ def main():
         st.session_state["_fx_cache_rerun_done"] = True
         st.rerun()
 
-    prepared = load_prepared(csv_path, fx_version)
+    prepared = load_prepared(csv_path, fx_version, manual_version)
 
     # Top-of-page budget progress for the current month
     plot_current_month_budget_progress(prepared.df)
@@ -419,6 +443,76 @@ def main():
             height=210,
             hide_index=True,
         )
+
+    st.divider()
+    st.subheader("Manual external expenses")
+    st.caption(
+        "Manual imports are stored in data/manual_expenses.csv and included in all plots/tables."
+    )
+
+    with st.expander("Advanced", expanded=False):
+        st.caption(
+            "Add expenses from another bank account. Saved in data/manual_expenses.csv and automatically included in all plots/tables."
+        )
+
+        if st.session_state.get("_manual_expense_last_status") == "success":
+            st.success("Success: manual expense saved.")
+            st.session_state.pop("_manual_expense_last_status", None)
+
+        with st.form("add_manual_expense", clear_on_submit=True):
+            d = st.date_input("Date", help="Example: 2026-02-25")
+            desc = st.text_input(
+                "Description",
+                placeholder="e.g., Dentist (external) / Mobile bill / Rent",
+                help="Free text shown in tables and used for categorization.",
+            )
+            amt_str = st.text_input(
+                "Amount (DKK)",
+                placeholder="e.g., 29.99",
+                help="Use dot for decimals (29.99). Comma (29,99) is also accepted and will be converted.",
+            )
+            cat = st.selectbox(
+                "Category (optional)",
+                options=[""] + category_options(),
+                help="Example: Groceries (leave empty to save as Other)",
+            )
+            submitted = st.form_submit_button("Add manual expense")
+
+        if submitted:
+            def parse_amount_dkk(raw: str) -> float | None:
+                s = str(raw or "").strip()
+                if not s:
+                    return None
+                # Allow either decimal comma or dot; strip spaces.
+                s = s.replace(" ", "").replace(",", ".")
+                try:
+                    return float(s)
+                except Exception:
+                    return None
+
+            errors: list[str] = []
+            if not str(desc).strip():
+                errors.append("Description is required")
+
+            amt = parse_amount_dkk(amt_str)
+            if amt is None:
+                errors.append("Amount must be a number like 29.99")
+            elif float(amt) <= 0:
+                errors.append("Amount must be > 0")
+
+            if errors:
+                st.error("Failed: " + "; ".join(errors) + ".")
+            else:
+                append_manual_expense(
+                    data_dir="data",
+                    completed_date=d,
+                    description=str(desc),
+                    amount_dkk=float(amt),
+                    category=(str(cat).strip() or None),
+                )
+                st.session_state["_manual_expense_last_status"] = "success"
+                st.rerun()
+
 
 
 if __name__ == "__main__":
