@@ -173,8 +173,14 @@ def month_totals(totals_by_month: pd.DataFrame, month: str) -> tuple[float, floa
 
 def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int) -> None:
     # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1
-    st.caption(
-        f"💸 {fmt_dkk(exp_total)} DKK | 💰 {fmt_dkk(inc_total)} DKK | ♻️ {fmt_dkk(ref_total)} DKK | 📊 {items}"
+    st.markdown(
+        "<small>"
+        f"💸 <b>{fmt_dkk(exp_total)}</b> DKK | "
+        f"💰 {fmt_dkk(inc_total)} DKK | "
+        f"♻️ {fmt_dkk(ref_total)} DKK | "
+        f"📊 {items}"
+        "</small>",
+        unsafe_allow_html=True,
     )
 
 
