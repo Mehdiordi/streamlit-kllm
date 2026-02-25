@@ -10,6 +10,7 @@ from processing import (
     PreparedData,
     cleanup_outdated_account_statement_csvs,
     find_latest_account_statement_csv,
+    load_monthly_limits,
     prepare_data_for_plotting,
 )
 
@@ -147,6 +148,139 @@ def expenses_table_for_month(df: pd.DataFrame, month: str) -> pd.DataFrame:
     return out
 
 
+def plot_current_month_budget_progress(df: pd.DataFrame) -> None:
+    """Plot allowed cumulative spend vs actual cumulative spend for the current month."""
+
+    if df.empty:
+        return
+
+    required = {"completed_date", "type", "amount_dkk"}
+    if not required.issubset(set(df.columns)):
+        return
+
+    limits = load_monthly_limits()
+    today = pd.Timestamp.today().normalize()
+    period = today.to_period("M")
+    month_num = int(period.month)
+    month_limit = float(limits.get(month_num, 0.0) or 0.0)
+    if month_limit <= 0:
+        st.caption(
+            f"No monthly limit found for {period.strftime('%B')} in expense_categories.yml (or it is 0)."
+        )
+        return
+
+    month_start = period.start_time.normalize()
+    month_end = period.end_time.normalize()
+    days = pd.date_range(month_start, month_end, freq="D")
+    if len(days) == 0:
+        return
+
+    tmp = df.copy()
+    tmp["completed_date"] = pd.to_datetime(tmp["completed_date"], errors="coerce")
+    tmp["amount_dkk"] = pd.to_numeric(tmp["amount_dkk"], errors="coerce")
+
+    tmp = tmp[tmp["type"].astype(str).str.casefold().eq("expense")].copy()
+    tmp = tmp[tmp["completed_date"].notna() & tmp["amount_dkk"].notna()].copy()
+    if tmp.empty:
+        return
+
+    tmp["day"] = tmp["completed_date"].dt.normalize()
+    tmp = tmp[(tmp["day"] >= month_start) & (tmp["day"] <= month_end)].copy()
+    if tmp.empty:
+        return
+
+    daily_spend = tmp.groupby("day")["amount_dkk"].apply(lambda s: float(s.abs().sum()))
+    actual_cum = daily_spend.reindex(days, fill_value=0.0).cumsum()
+    # Do not plot into the future
+    actual_cum = actual_cum.where(days <= min(today, month_end), np.nan)
+
+    per_day = month_limit / float(len(days))
+    allowed_cum = pd.Series(per_day * (np.arange(len(days)) + 1), index=days, dtype="float")
+
+    bg = "#0e1117"
+    fg = "#e5e7eb"
+    grid = "#374151"
+
+    fig, ax = plt.subplots(figsize=(12.0, 2.8), dpi=120)
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+
+    ax.plot(days, allowed_cum.values, color="#f59e0b", linestyle=(0, (4, 4)), linewidth=2.0)
+
+    # Plot actual cumulative spend with conditional coloring:
+    # blue when under budget line, red only for the part above.
+    from matplotlib.collections import LineCollection
+    import matplotlib.dates as mdates
+
+    x = mdates.date2num(pd.to_datetime(days).to_pydatetime())
+    y = np.asarray(actual_cum.values, dtype="float")
+    a = np.asarray(allowed_cum.values, dtype="float")
+
+    segments: list[np.ndarray] = []
+    colors: list[str] = []
+
+    def add_segment(x0: float, y0: float, x1: float, y1: float, above: bool) -> None:
+        segments.append(np.array([[x0, y0], [x1, y1]], dtype=float))
+        colors.append("#ef4444" if above else "#60a5fa")
+
+    for i in range(len(x) - 1):
+        x0, x1 = float(x[i]), float(x[i + 1])
+        y0, y1 = float(y[i]), float(y[i + 1])
+        a0, a1 = float(a[i]), float(a[i + 1])
+
+        if not np.isfinite(y0) or not np.isfinite(y1):
+            continue
+
+        d0 = y0 - a0
+        d1 = y1 - a1
+        above0 = d0 > 0
+        above1 = d1 > 0
+
+        if above0 == above1:
+            add_segment(x0, y0, x1, y1, above=above0)
+            continue
+
+        # Split at the crossing point where actual == allowed.
+        denom = (y1 - y0) - (a1 - a0)
+        if denom == 0:
+            # Parallel; fall back to coloring by the end point.
+            add_segment(x0, y0, x1, y1, above=above1)
+            continue
+
+        t = (a0 - y0) / denom
+        t = float(np.clip(t, 0.0, 1.0))
+        xi = x0 + t * (x1 - x0)
+        yi = y0 + t * (y1 - y0)
+
+        add_segment(x0, y0, xi, yi, above=above0)
+        add_segment(xi, yi, x1, y1, above=above1)
+
+    if segments:
+        lc = LineCollection(
+            segments,
+            colors=colors,
+            linewidths=2.0,
+            linestyles=(0, (1, 2)),
+        )
+        ax.add_collection(lc)
+
+    ax.set_title("Cumulative spending (DKK)", color=fg, fontsize=11, fontweight="bold", pad=8)
+    ax.tick_params(axis="x", colors=fg, labelsize=8)
+    ax.tick_params(axis="y", colors=fg, labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.grid(True, axis="y", color=grid, alpha=0.35, linewidth=0.8)
+    ax.set_axisbelow(True)
+
+    # Keep y-axis starting at 0 for readability
+    max_y = float(np.nanmax([allowed_cum.max(), actual_cum.max()])) if len(days) else 0.0
+    ax.set_ylim(0, max(1.0, max_y * 1.08))
+
+    plt.tight_layout()
+    st.pyplot(fig, clear_figure=True)
+
+
 def main():
     st.set_page_config(page_title="Revolut expenses", layout="wide")
 
@@ -179,6 +313,9 @@ def main():
         st.rerun()
 
     prepared = load_prepared(csv_path, fx_version)
+
+    # Top-of-page budget progress for the current month
+    plot_current_month_budget_progress(prepared.df)
 
     # If FX conversion fails for some rows (e.g., frankfurter timeout), those rows end up with amount_dkk = NA
     # and are excluded from totals/plots. Make this explicit so the dashboard stays trustworthy.

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as Date
 from pathlib import Path
+import calendar
 import logging
 import re
 import unicodedata
@@ -28,6 +29,42 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EXPENSE_CATEGORY = "Other"
 EXPENSE_CATEGORY_MAP_PATH = Path(__file__).with_name("expense_categories.yml")
+
+
+_expense_config_cache: dict[Path, tuple[float, dict[str, str], dict[int, float]]] = {}
+
+
+def _month_key_to_number(key: str) -> int | None:
+    k = normalize_text(key)
+    if not k:
+        return None
+
+    # Accept "January", "jan", etc (case/space insensitive via normalize_text)
+    k_compact = k.replace(" ", "")
+
+    for i in range(1, 13):
+        full = normalize_text(calendar.month_name[i]).replace(" ", "")
+        abbr = normalize_text(calendar.month_abbr[i]).replace(" ", "")
+        if k_compact == full or (abbr and k_compact == abbr):
+            return i
+
+    return None
+
+
+def _to_float_maybe(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+    return None
 
 
 def find_latest_account_statement_csv(search_dir: str = "data") -> str:
@@ -284,28 +321,50 @@ def _parse_simple_yaml_mapping(text: str) -> dict[str, str]:
     return out
 
 
-def _load_expense_category_mapping_file(path: Path) -> dict[str, str]:
-    """Load keyword->category mapping from YAML.
+def _load_expense_config_file(path: Path) -> tuple[dict[str, str], dict[int, float]]:
+    """Load (keyword->category mapping, month_number->limit_dkk) from YAML.
 
-    Uses PyYAML if installed; otherwise uses a small built-in parser.
+    File format supports mixing both:
+    - Category rules: "netto": "Groceries"
+    - Monthly limits: January: 23000
+
+    Uses PyYAML if installed; otherwise falls back to a small built-in mapping parser.
     """
 
     raw = path.read_text(encoding="utf-8")
 
+    data: object | None = None
     try:
         import yaml  # type: ignore
 
         data = yaml.safe_load(raw)
-        if isinstance(data, dict):
-            return {
-                str(k): str(v)
-                for k, v in data.items()
-                if k is not None and v is not None
-            }
     except Exception:
-        pass
+        data = None
 
-    return _parse_simple_yaml_mapping(raw)
+    if not isinstance(data, dict):
+        # Fallback parser returns string values
+        data = _parse_simple_yaml_mapping(raw)
+
+    categories: dict[str, str] = {}
+    monthly_limits: dict[int, float] = {}
+
+    for k, v in data.items():
+        if k is None or v is None:
+            continue
+
+        # Monthly limit?
+        month_num = _month_key_to_number(str(k))
+        if month_num is not None:
+            limit = _to_float_maybe(v)
+            if limit is not None:
+                monthly_limits[month_num] = float(limit)
+            continue
+
+        # Category mapping
+        if isinstance(v, (str, int, float)):
+            categories[str(k)] = str(v)
+
+    return categories, monthly_limits
 
 
 _category_cache: dict[Path, tuple[float, list[tuple[str, str]]]] = {}
@@ -330,7 +389,7 @@ def load_expense_category_map(path: str | Path | None = None) -> list[tuple[str,
     if cached is not None and cached[0] == mtime:
         return cached[1]
 
-    mapping = _load_expense_category_mapping_file(p)
+    mapping, _monthly_limits = _load_expense_config_file(p)
 
     compiled: list[tuple[str, str]] = []
     for raw_key, raw_cat in mapping.items():
@@ -344,6 +403,23 @@ def load_expense_category_map(path: str | Path | None = None) -> list[tuple[str,
 
     _category_cache[p] = (mtime, compiled)
     return compiled
+
+
+def load_monthly_limits(path: str | Path | None = None) -> dict[int, float]:
+    """Load monthly expense limits (DKK) keyed by month number (1-12)."""
+
+    p = Path(path) if path is not None else EXPENSE_CATEGORY_MAP_PATH
+    if not p.exists():
+        return {}
+
+    mtime = p.stat().st_mtime
+    cached = _expense_config_cache.get(p)
+    if cached is not None and cached[0] == mtime:
+        return dict(cached[2])
+
+    categories, monthly_limits = _load_expense_config_file(p)
+    _expense_config_cache[p] = (mtime, categories, monthly_limits)
+    return dict(monthly_limits)
 
 
 def explain_expense_category(description: object) -> tuple[str, str | None]:

@@ -3,6 +3,21 @@
 # Matching is case-insensitive after normalization (unicode NFKC, dash normalization, whitespace collapse).
 # NOTE: Keys are substring-matched against the normalized description.
 
+# Monthly expense limits (DKK)
+# Used by the Streamlit dashboard to plot allowed cumulative spending vs actual spending
+January: 20000
+February: 20000
+March: 20000
+April: 20000
+May: 20000
+June: 20000
+July: 20000
+August: 20000
+September: 20000
+October: 20000
+November: 20000
+December: 20000
+
 # Groceries
 "carlsro bageri aps": "Groceries"
 "normal": "Groceries"
