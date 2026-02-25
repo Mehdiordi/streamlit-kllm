@@ -98,6 +98,8 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     ax.grid(True, axis="x", color=grid, alpha=0.35, linewidth=0.8)
     ax.set_axisbelow(True)
 
+    total_spend = float(np.nansum(s.values)) if len(s.values) else 0.0
+
     # Value labels (on/near the end of each bar)
     pad_inside = max_val * 0.02
     pad_outside = max_val * 0.015
@@ -105,8 +107,10 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
         w = float(b.get_width())
         y = float(b.get_y() + b.get_height() / 2)
         label = fmt_dkk(w)
+        pct = (100.0 * w / total_spend) if total_spend > 0 else 0.0
+        pct_label = f"({pct:.0f}%)" if pct >= 1.0 else ""
         if max_val > 0 and w >= max_val * 0.12:
-            ax.text(
+            value_text = ax.text(
                 w - pad_inside,
                 y,
                 label,
@@ -116,8 +120,21 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
                 fontsize=8.5,
                 fontweight="bold",
             )
+            if pct_label:
+                ax.annotate(
+                    pct_label,
+                    xy=value_text.get_position(),
+                    xycoords="data",
+                    textcoords="offset points",
+                    xytext=(4, 0),
+                    va="center",
+                    ha="left",
+                    color=fg,
+                    fontsize=7.0,
+                    fontweight="normal",
+                )
         else:
-            ax.text(
+            value_text = ax.text(
                 w + pad_outside,
                 y,
                 label,
@@ -127,6 +144,21 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
                 fontsize=8.5,
                 fontweight="bold",
             )
+            if pct_label:
+                # Approximate text width (in points) to place percentage after the value.
+                x_offset_pts = 6 * len(label) + 6
+                ax.annotate(
+                    pct_label,
+                    xy=value_text.get_position(),
+                    xycoords="data",
+                    textcoords="offset points",
+                    xytext=(x_offset_pts, 0),
+                    va="center",
+                    ha="left",
+                    color=fg,
+                    fontsize=7.0,
+                    fontweight="normal",
+                )
 
     plt.tight_layout()
     st.pyplot(fig, clear_figure=True)
