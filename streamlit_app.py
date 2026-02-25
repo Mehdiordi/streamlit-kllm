@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from fx_cache import FxCacheBackgroundUpdater, ensure_fx_cache_files, fx_cache_version
 from processing import (
     PreparedData,
     cleanup_outdated_account_statement_csvs,
@@ -18,8 +19,14 @@ def fmt_dkk(x: float) -> str:
 
 
 @st.cache_data(show_spinner=True)
-def load_prepared(csv_path: str) -> PreparedData:
+def load_prepared(csv_path: str, fx_version: float) -> PreparedData:
     return prepare_data_for_plotting(csv_path)
+
+
+@st.cache_resource
+def fx_background_updater() -> FxCacheBackgroundUpdater:
+    # One updater per Streamlit session.
+    return FxCacheBackgroundUpdater(data_dir="data").start()
 
 
 def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFrame, month: str):
@@ -156,7 +163,44 @@ def main():
 
     st.caption(f"CSV: {csv_path}")
 
-    prepared = load_prepared(csv_path)
+    # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
+    with st.spinner("Preparing FX cache (first run may take a bit)…"):
+        ensure_fx_cache_files(data_dir="data")
+
+    fx_version = fx_cache_version(data_dir="data")
+
+    # Background refresh: updates cache to today's date without blocking the UI.
+    updater = fx_background_updater()
+    if updater.error:
+        st.caption(f"FX cache update warning: {updater.error}")
+
+    if updater.done.is_set() and updater.updated and not st.session_state.get("_fx_cache_rerun_done"):
+        st.session_state["_fx_cache_rerun_done"] = True
+        st.rerun()
+
+    prepared = load_prepared(csv_path, fx_version)
+
+    # If FX conversion fails for some rows (e.g., frankfurter timeout), those rows end up with amount_dkk = NA
+    # and are excluded from totals/plots. Make this explicit so the dashboard stays trustworthy.
+    df = prepared.df
+    if not df.empty and {"type", "currency", "completed_date", "amount_net", "amount_dkk"}.issubset(df.columns):
+        ccy = df["currency"].astype(str).str.upper().str.strip()
+        relevant = (
+            df["type"].isin(["income", "expense", "refund"])
+            & df["completed_date"].notna()
+            & df["amount_net"].notna()
+            & ccy.ne("DKK")
+        )
+        missing = relevant & df["amount_dkk"].isna()
+        if bool(missing.any()):
+            summary = ccy[missing].value_counts().head(6)
+            summary_txt = ", ".join([f"{k}: {int(v)}" for k, v in summary.items()])
+            st.warning(
+                "FX conversion failed for some transactions (network/API timeout). "
+                "Those rows are excluded from monthly totals and plots. "
+                f"Missing conversions: {int(missing.sum())}. "
+                + (f"Top currencies: {summary_txt}" if summary_txt else "")
+            )
 
     if prepared.spend_by_month_category.empty:
         st.warning("No expense rows with a valid DKK amount to plot.")

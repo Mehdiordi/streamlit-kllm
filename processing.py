@@ -4,7 +4,7 @@ This module mirrors the notebook pipeline in 01_visualize_df.ipynb:
 - load exactly one Revolut export CSV
 - normalize schema + parse types
 - classify transactions (expense/income/refund)
-- categorize expenses using config.py rules
+- categorize expenses using expense_categories.yml rules
 - convert amount_net to DKK on completed_date using historical FX
 - prepare monthly expense-by-category series for plotting
 """
@@ -12,21 +12,22 @@ This module mirrors the notebook pipeline in 01_visualize_df.ipynb:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as Date
 from pathlib import Path
-import importlib
 import logging
 import re
-import time
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import requests
 
-import config
+import fx_cache
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_EXPENSE_CATEGORY = "Other"
+EXPENSE_CATEGORY_MAP_PATH = Path(__file__).with_name("expense_categories.yml")
 
 
 def find_latest_account_statement_csv(search_dir: str = "data") -> str:
@@ -192,28 +193,189 @@ def normalize_text(value: object) -> str:
     return text
 
 
-def _compiled_expense_rules() -> List[Tuple[str, List[str]]]:
-    # Reload so edits to config.py apply without restarting the process.
-    cfg = importlib.reload(config)
-    return [
-        (category_name, [normalize_text(k) for k in keywords])
-        for category_name, keywords in cfg.EXPENSE_CATEGORY_RULES
-    ]
+def normalize_keyword(value: object) -> str:
+    """Normalize a keyword used for substring rules.
+
+    Unlike `normalize_text`, this preserves leading/trailing whitespace.
+    This allows rule authors to intentionally use spaces for crude word-boundary
+    matching (e.g. "bar " should not match "lebara").
+
+        Matching behavior:
+        - If a keyword has leading/trailing spaces, those spaces are treated as intentional
+            and matching is done against the spaced-normalized description only.
+        - Otherwise, matching is whitespace-insensitive: both the spaced form and a
+            space-stripped form are checked.
+    """
+
+    if value is None:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+
+    text = unicodedata.normalize("NFKC", str(value)).casefold()
+    text = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", text)
+    # Collapse internal whitespace, but keep any intentional leading/trailing spaces.
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _matches_keyword(keyword_norm: str, text_norm: str, text_compact: str) -> bool:
+    """Return True if keyword matches description under 'exact' rules.
+
+    - Uses normalized (casefolded) strings.
+    - Checks spaced substring match.
+    - For keywords without intentional boundary spaces, also checks a compact form
+      where spaces are removed to tolerate missing/extra whitespace.
+    """
+
+    if not keyword_norm:
+        return False
+
+    if keyword_norm in text_norm:
+        return True
+
+    if keyword_norm.startswith(" ") or keyword_norm.endswith(" "):
+        return False
+
+    kw_compact = keyword_norm.replace(" ", "")
+    if not kw_compact:
+        return False
+
+    return kw_compact in text_compact
+
+
+def _parse_simple_yaml_mapping(text: str) -> dict[str, str]:
+    """Parse a small subset of YAML used by expense_categories.yml.
+
+    Supports lines like:
+      "netto": "Groceries"
+      netto: Groceries
+
+    Ignores blank lines and lines starting with '#'.
+    """
+
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # tolerate trailing commas (people may copy JSON-ish snippets)
+        if line.endswith(","):
+            line = line[:-1].rstrip()
+
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+
+        def unquote(s: str) -> str:
+            if len(s) >= 2 and ((s[0] == s[-1]) and s[0] in ("\"", "'")):
+                return s[1:-1]
+            return s
+
+        key = unquote(key)
+        value = unquote(value)
+        if key and value:
+            out[key] = value
+
+    return out
+
+
+def _load_expense_category_mapping_file(path: Path) -> dict[str, str]:
+    """Load keyword->category mapping from YAML.
+
+    Uses PyYAML if installed; otherwise uses a small built-in parser.
+    """
+
+    raw = path.read_text(encoding="utf-8")
+
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(raw)
+        if isinstance(data, dict):
+            return {
+                str(k): str(v)
+                for k, v in data.items()
+                if k is not None and v is not None
+            }
+    except Exception:
+        pass
+
+    return _parse_simple_yaml_mapping(raw)
+
+
+_category_cache: dict[Path, tuple[float, list[tuple[str, str]]]] = {}
+
+
+def load_expense_category_map(path: str | Path | None = None) -> list[tuple[str, str]]:
+    """Return compiled expense category mapping as [(keyword_norm, category)].
+
+    - Keywords are normalized with `normalize_keyword` (preserves outer spaces).
+    - Matching should be done against `normalize_text(description)`.
+    - Order is longest-key-first to keep matching deterministic.
+    """
+
+    p = Path(path) if path is not None else EXPENSE_CATEGORY_MAP_PATH
+    if not p.exists():
+        raise FileNotFoundError(
+            f"Missing expense category map: {p}. Expected a YAML mapping file like '\"netto\": \"Groceries\"'."
+        )
+
+    mtime = p.stat().st_mtime
+    cached = _category_cache.get(p)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    mapping = _load_expense_category_mapping_file(p)
+
+    compiled: list[tuple[str, str]] = []
+    for raw_key, raw_cat in mapping.items():
+        key = normalize_keyword(raw_key)
+        cat = str(raw_cat).strip()
+        if not key or not cat:
+            continue
+        compiled.append((key, cat))
+
+    compiled.sort(key=lambda kv: (len(kv[0]), kv[0]), reverse=True)
+
+    _category_cache[p] = (mtime, compiled)
+    return compiled
+
+
+def explain_expense_category(description: object) -> tuple[str, str | None]:
+    """Return (category, matched_keyword) for a description.
+
+    Intended for debugging/trust-building when a classification looks wrong.
+    """
+
+    text = normalize_text(description)
+    text_compact = text.replace(" ", "")
+    compiled = load_expense_category_map()
+
+    for keyword, category in compiled:
+        if _matches_keyword(keyword, text, text_compact):
+            return category, keyword
+
+    return DEFAULT_EXPENSE_CATEGORY, None
 
 
 def categorize_expenses(df: pd.DataFrame) -> pd.DataFrame:
     if "type" not in df.columns:
         raise ValueError("Missing required column: type")
 
-    compiled_rules = _compiled_expense_rules()
-    cfg = importlib.reload(config)
+    compiled = load_expense_category_map()
 
     def category_from_description(description: object) -> str:
         text = normalize_text(description)
-        for category_name, keywords in compiled_rules:
-            if any(k and k in text for k in keywords):
-                return category_name
-        return cfg.DEFAULT_EXPENSE_CATEGORY
+        text_compact = text.replace(" ", "")
+        for keyword, category in compiled:
+            if _matches_keyword(keyword, text, text_compact):
+                return category
+        return DEFAULT_EXPENSE_CATEGORY
 
     out = df.copy()
     is_expense = out["type"].astype(str).str.casefold().eq("expense")
@@ -234,55 +396,32 @@ def fx_rate_on_date(
     max_backtrack_days: int = 10,
     _cache: Dict[Tuple[str, str, str], Tuple[Optional[float], Optional[pd.Timestamp]]] = {},
 ) -> Tuple[Optional[float], Optional[pd.Timestamp]]:
-    """Returns (rate, used_date).
+    """Backwards-compatible wrapper around fx_cache.fx_rate_on_date."""
 
-    Uses ECB daily rates via frankfurter.app and backtracks for weekends/holidays.
+    return fx_cache.fx_rate_on_date(
+        date=date,
+        from_ccy=from_ccy,
+        to_ccy=to_ccy,
+        max_backtrack_days=max_backtrack_days,
+        _cache=_cache,
+    )
+
+
+def convert_to_dkk(
+    df: pd.DataFrame,
+    fx_data_dir: str | Path = "data",
+    fx_cache_currencies: Iterable[str] = fx_cache.FX_CACHE_CURRENCIES,
+    fx_cache_start_date: Date = fx_cache.FX_CACHE_START_DATE,
+    to_ccy: str = fx_cache.FX_CACHE_TO_CCY,
+) -> pd.DataFrame:
+    """Add amount_dkk + conversion_rate for income/expense/refund rows with completed_date.
+
+    Fast path:
+    - Uses local FX cache CSVs for USD/EUR/GBP->DKK (stored under fx_data_dir)
+
+    Fallback path:
+    - For other currencies, uses the per-date frankfurter endpoint with backtracking.
     """
-
-    from_ccy = str(from_ccy).upper().strip()
-    to_ccy = str(to_ccy).upper().strip()
-
-    if not from_ccy or from_ccy == to_ccy:
-        used = pd.Timestamp(date).date() if not pd.isna(date) else None
-        return 1.0, used
-
-    if pd.isna(date):
-        return None, None
-
-    d = pd.Timestamp(date).date()
-    last_error: Optional[Exception] = None
-    for attempt in range(max_backtrack_days + 1):
-        key = (str(d), from_ccy, to_ccy)
-        if key in _cache:
-            return _cache[key]
-
-        url = f"https://api.frankfurter.app/{d}?from={from_ccy}&to={to_ccy}"
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                rate = float(data["rates"][to_ccy])
-                api_date_str = data.get("date")
-                used_date = pd.to_datetime(api_date_str).date() if api_date_str else d
-                _cache[key] = (rate, used_date)
-                return rate, used_date
-        except Exception as e:
-            # Streamlit runs this frequently; keep logs quiet during transient network issues.
-            last_error = e
-
-        d = (pd.Timestamp(d) - pd.Timedelta(days=1)).date()
-        time.sleep(0.05)
-
-    if last_error is not None:
-        logger.warning(
-            f"Failed to fetch FX rate for {from_ccy}->{to_ccy} starting at {pd.Timestamp(date).date()} "
-            f"after {max_backtrack_days+1} attempts. Last error: {last_error}"
-        )
-    return None, None
-
-
-def convert_to_dkk(df: pd.DataFrame) -> pd.DataFrame:
-    """Add amount_dkk + conversion_rate for income/expense/refund rows with completed_date."""
 
     out = df.copy()
     out = out.drop(columns=["conversion_date"], errors="ignore")
@@ -309,18 +448,45 @@ def convert_to_dkk(df: pd.DataFrame) -> pd.DataFrame:
     amt = pd.to_numeric(out.loc[mask, "amount_net"], errors="coerce")
 
     rate = pd.Series(1.0, index=ccy.index, dtype="float")
-    need = ccy.ne("DKK") & dt.notna()
+    need = ccy.ne(to_ccy) & dt.notna()
 
-    pairs = pd.DataFrame({"dt": dt[need], "ccy": ccy[need]}).drop_duplicates()
+    # Ensure required local cache files exist (first run blocks until created).
+    fx_cache_set = {str(c).upper().strip() for c in fx_cache_currencies}
+    if fx_cache_set:
+        fx_cache.ensure_fx_cache_files(
+            data_dir=fx_data_dir,
+            currencies=fx_cache_set,
+            start_date=fx_cache_start_date,
+            to_ccy=to_ccy,
+        )
 
-    pair_to_rate: Dict[Tuple[object, str], Optional[float]] = {}
-    for row in pairs.itertuples(index=False):
-        fx, _used = fx_rate_on_date(row.dt, row.ccy, "DKK")
-        pair_to_rate[(row.dt.date(), row.ccy)] = fx
+    cached_need = need & ccy.isin(list(fx_cache_set))
+    if bool(cached_need.any()):
+        for from_ccy in fx_cache_set:
+            idx = cached_need & ccy.eq(from_ccy)
+            if not bool(idx.any()):
+                continue
 
-    rate.loc[need] = [
-        pair_to_rate.get((d.date(), c), np.nan) for d, c in zip(dt[need], ccy[need])
-    ]
+            s = fx_cache.load_fx_cache_series(from_ccy, data_dir=fx_data_dir, to_ccy=to_ccy)
+            if s.empty:
+                continue
+
+            aligned = s.reindex(dt[idx])
+            rate.loc[idx] = aligned.to_numpy(dtype="float")
+
+    # Fallback for non-cached currencies
+    api_need = need & ~ccy.isin(list(fx_cache_set))
+    if bool(api_need.any()):
+        pairs = pd.DataFrame({"dt": dt[api_need], "ccy": ccy[api_need]}).drop_duplicates()
+
+        pair_to_rate: Dict[Tuple[object, str], Optional[float]] = {}
+        for row in pairs.itertuples(index=False):
+            fx, _used = fx_rate_on_date(row.dt, row.ccy, to_ccy)
+            pair_to_rate[(row.dt.date(), row.ccy)] = fx
+
+        rate.loc[api_need] = [
+            pair_to_rate.get((d.date(), c), np.nan) for d, c in zip(dt[api_need], ccy[api_need])
+        ]
 
     out.loc[mask, "conversion_rate"] = rate
     out.loc[mask, "amount_dkk"] = amt * rate
