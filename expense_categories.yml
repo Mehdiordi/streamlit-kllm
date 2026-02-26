@@ -5,18 +5,18 @@
 
 # Monthly expense limits (DKK)
 # Used by the Streamlit dashboard to plot allowed cumulative spending vs actual spending
-January: 20000
-February: 20000
-March: 20000
-April: 20000
-May: 20000
-June: 20000
-July: 20000
-August: 20000
-September: 20000
-October: 20000
-November: 20000
-December: 20000
+January: 21000
+February: 21000
+March: 21000
+April: 21000
+May: 21000
+June: 21000
+July: 21000
+August: 21000
+September: 21000
+October: 21000
+November: 21000
+December: 21000
 
 # Groceries
 "carlsro bageri aps": "Groceries"

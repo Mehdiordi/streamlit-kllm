@@ -73,7 +73,7 @@ def _to_float_maybe(value: object) -> float | None:
     return None
 
 
-def find_latest_account_statement_csv(search_dir: str = "data") -> str:
+def find_latest_account_statement_csv(search_dir: str = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents") -> str:
     """Pick the most recent Revolut export CSV containing 'account-statement'.
 
     Preference order:

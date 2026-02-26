@@ -78,6 +78,12 @@ def load_investment_summary(
         else pd.DataFrame(columns=["currency", "value"])
     )
 
+    # Get max transaction date from investment statement
+    invest_max_date = None
+    if not invest_tx.empty and "tx_datetime" in invest_tx.columns:
+        invest_tx["tx_datetime"] = pd.to_datetime(invest_tx["tx_datetime"], errors="coerce")
+        invest_max_date = invest_tx["tx_datetime"].max()
+
     today = pd.Timestamp.today().normalize()
 
     if dkk_exchanges.empty:
@@ -167,6 +173,7 @@ def load_investment_summary(
         "interest_rows": interest,
         "today": today,
         "summary": inv.parse_investment_summary(consolidated_csv_path),
+        "invest_max_date": invest_max_date,
     }
 
 
@@ -456,13 +463,26 @@ def plot_current_month_budget_progress(df: pd.DataFrame) -> None:
         )
         ax.add_collection(lc)
 
-    ax.set_title("Cumulative spending (DKK)", color=fg, fontsize=11, fontweight="bold", pad=8)
-    ax.tick_params(axis="x", colors=fg, labelsize=8)
-    ax.tick_params(axis="y", colors=fg, labelsize=8)
+    max_date = pd.to_datetime(df['completed_date'], errors='coerce').max()
+    title = f"Cumulative pending (DKK) - {max_date.strftime('%B %Y')}" if pd.notna(max_date) else "Cumulative pending (DKK)"
+    ax.set_title(title, color=fg, fontsize=11, fontweight="bold", pad=8)
+    
+    # Set y-axis with steps of 3000
+    from matplotlib.ticker import MultipleLocator
+    ax.yaxis.set_major_locator(MultipleLocator(3000))
+    
+    # Set x-axis with steps of 1 day
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    
+    ax.tick_params(axis="x", colors=fg, labelsize=7, rotation=45)
+    ax.tick_params(axis="y", colors=fg, labelsize=7)
     for spine in ax.spines.values():
         spine.set_visible(False)
 
+    # Grid lines: horizontal (y-axis) and vertical (x-axis)
     ax.grid(True, axis="y", color=grid, alpha=0.35, linewidth=0.8)
+    ax.grid(True, axis="x", color=grid, alpha=0.15, linewidth=0.4)
     ax.set_axisbelow(True)
 
     # Keep y-axis starting at 0 for readability
@@ -479,13 +499,13 @@ def main():
     st.title("Revolut statement")
 
     try:
-        csv_path = find_latest_account_statement_csv("data")
+        csv_path = find_latest_account_statement_csv("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents")
     except Exception as e:
         st.error(str(e))
         return
 
     # Keep workspace tidy: delete older account-statement CSVs.
-    cleanup_outdated_account_statement_csvs("data", keep_path=csv_path)
+    cleanup_outdated_account_statement_csvs("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents", keep_path=csv_path)
 
     st.caption(f"CSV: {csv_path}")
 
@@ -509,6 +529,12 @@ def main():
 
     with tabs[0]:
         prepared = load_prepared(csv_path, fx_version, manual_version)
+
+        # Display max transaction date
+        if not prepared.df.empty and "completed_date" in prepared.df.columns:
+            max_date = pd.to_datetime(prepared.df["completed_date"], errors="coerce").max()
+            if pd.notna(max_date):
+                st.info(f"📅 Latest transaction: {max_date.strftime('%B %d, %Y at %H:%M')}")
 
         # Top-of-page budget progress for the current month
         plot_current_month_budget_progress(prepared.df)
@@ -689,7 +715,7 @@ def main():
         st.subheader("Investment")
 
         try:
-            consolidated_csv_path = inv.find_latest_consolidated_statement_csv("data")
+            consolidated_csv_path = inv.find_latest_consolidated_statement_csv("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents")
         except Exception as e:
             st.error(f"Missing consolidated statement CSV: {e}")
             return
@@ -707,6 +733,11 @@ def main():
 
         summary_df = summary_data.get("summary")
         today = summary_data.get("today")
+        invest_max_date = summary_data.get("invest_max_date")
+
+        # Display max transaction date
+        if invest_max_date is not None and pd.notna(invest_max_date):
+            st.info(f"📅 Latest transaction: {invest_max_date.strftime('%B %d, %Y at %H:%M')}")
 
         if isinstance(today, pd.Timestamp):
             st.caption(f"As of: {today.date()}")
@@ -719,10 +750,18 @@ def main():
         metrics = {}
         fx_rates = {}
         
-        # Get FX rates for today
+        # Get FX rates for today (or most recent available)
         for ccy in ["USD", "GBP"]:
             s = load_fx_cache_series(ccy, data_dir="data", to_ccy=FX_CACHE_TO_CCY)
-            fx_rates[ccy] = float(s.get(pd.Timestamp.today().normalize())) if not s.empty else None
+            if not s.empty:
+                # Try today first, fall back to most recent available
+                rate_val = s.get(pd.Timestamp.today().normalize())
+                if rate_val is None or pd.isna(rate_val):
+                    # Use the most recent available rate
+                    rate_val = s.iloc[-1]
+                fx_rates[ccy] = float(rate_val) if rate_val is not None and not pd.isna(rate_val) else None
+            else:
+                fx_rates[ccy] = None
         
         # Parse summary data by section
         for section in summary_df["section"].unique():
