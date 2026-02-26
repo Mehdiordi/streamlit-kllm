@@ -464,7 +464,7 @@ def plot_current_month_budget_progress(df: pd.DataFrame) -> None:
         ax.add_collection(lc)
 
     max_date = pd.to_datetime(df['completed_date'], errors='coerce').max()
-    title = f"Cumulative pending (DKK) - {max_date.strftime('%B %Y')}" if pd.notna(max_date) else "Cumulative pending (DKK)"
+    title = f"Cumulative spending (DKK) - {max_date.strftime('%B %Y')}" if pd.notna(max_date) else "Cumulative spending (DKK)"
     ax.set_title(title, color=fg, fontsize=11, fontweight="bold", pad=8)
     
     # Set y-axis with steps of 3000
