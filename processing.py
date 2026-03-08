@@ -175,6 +175,10 @@ def normalize_revolut_df(raw: pd.DataFrame) -> pd.DataFrame:
     for col in ["completed_date", "started_date"]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
+    
+    # Use started_date as fallback for PENDING transactions without completed_date
+    if "completed_date" in df.columns and "started_date" in df.columns:
+        df["completed_date"] = df["completed_date"].fillna(df["started_date"])
 
     # Numeric columns
     for col in ["amount", "fee", "balance"]:

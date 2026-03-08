@@ -45,6 +45,8 @@ December: 21000
 "wolt market": "Groceries"
 "Kaffekapslen": "Groceries"
 "Mob.pay Nan Lygten": "Groceries"
+"Carlsro Super Let-Køb A/S": "Groceries"
+"Anywhere": "Groceries"
 
 # Pet
 "zooplus": "Pet"
@@ -67,6 +69,8 @@ December: 21000
 "skøjte": "Ice Hockey"
 "skoejte": "Ice Hockey"
 "rink": "Ice Hockey"
+"Mob.pay Pige Camp 2025": "Ice Hockey"
+"Copenhagen Falcon": "Ice Hockey"
 
 # Fuel
 "uno-x": "Fuel"
@@ -135,6 +139,7 @@ December: 21000
 "kebab": "Eat Out"
 "bar ": "Eat Out"
 "novo nordisk": "Eat Out"
+"Subway": "Eat Out"
 
 # Shopping
 "amazon": "Shopping"
@@ -150,6 +155,7 @@ December: 21000
 "Zalando Payments": "Shopping"
 "JYSK": "Shopping"
 "Nike": "Shopping"
+"Bygholm Menswear Aps": "Shopping"
 
 # Subscriptions
 "spotify": "Subscriptions"
@@ -186,6 +192,7 @@ December: 21000
 "tandlaege": "Health"
 "hospital": "Health"
 "Comfortclic": "Health"
+"PureGym": "Health"
 
 # Insurance
 "insurance": "Insurance"
