@@ -773,6 +773,166 @@ def convert_to_dkk(
     return out
 
 
+def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
+    """DEBUG: Show refund-to-expense allocations.
+    
+    Returns a DataFrame with columns:
+    - refund_date, refund_desc, refund_amount
+    - matched_expense_date, matched_expense_amount, allocation_amount
+    """
+    if base.empty:
+        return pd.DataFrame()
+
+    exp = base[base.get("type", "").astype(str).str.casefold().eq("expense")].copy()
+    if exp.empty:
+        return pd.DataFrame()
+
+    exp_amount = pd.to_numeric(exp.get("amount_dkk"), errors="coerce").abs()
+    exp = exp.loc[exp_amount.notna()].copy()
+    if exp.empty:
+        return pd.DataFrame()
+
+    exp["_remaining_spend"] = exp_amount.loc[exp.index].astype(float)
+    exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
+    exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
+
+    ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
+    if ref.empty:
+        return pd.DataFrame()
+
+    ref["_refund_amt"] = pd.to_numeric(ref.get("amount_dkk"), errors="coerce").abs()
+    ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
+    ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
+    ref = ref.loc[
+        ref["_refund_amt"].notna()
+        & ref["_completed"].notna()
+        & ref["_desc_norm"].ne("")
+    ].copy()
+
+    if ref.empty:
+        return pd.DataFrame()
+
+    ref = ref.sort_values(["_completed"], ascending=[True])
+
+    allocations = []
+    for _idx, refund in ref.iterrows():
+        remaining_refund = float(refund["_refund_amt"])
+        if remaining_refund <= 0:
+            continue
+
+        eligible = exp[
+            exp["_desc_norm"].eq(refund["_desc_norm"])
+            & exp["_completed"].notna()
+            & exp["_completed"].le(refund["_completed"])
+            & exp["_remaining_spend"].gt(0)
+        ]
+        if eligible.empty:
+            continue
+
+        eligible = eligible.sort_values(["_completed"], ascending=[False])
+
+        for idx in eligible.index.tolist():
+            if remaining_refund <= 0:
+                break
+            cur = float(exp.at[idx, "_remaining_spend"])
+            if cur <= 0:
+                continue
+            used = min(cur, remaining_refund)
+            exp.at[idx, "_remaining_spend"] = cur - used
+            remaining_refund -= used
+            
+            allocations.append({
+                "refund_date": refund["_completed"],
+                "refund_description": refund.get("description", ""),
+                "refund_amount": float(refund["_refund_amt"]),
+                "matched_expense_date": exp.at[idx, "_completed"],
+                "matched_expense_amount": cur,
+                "allocation_amount": used,
+            })
+
+    result = pd.DataFrame(allocations)
+    if verbose and not result.empty:
+        print("\n=== DEBUG: Refund-to-Expense Allocations ===")
+        print(result.to_string(index=False))
+        print()
+    return result
+
+
+def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
+    """Return per-expense spend after allocating refunds to prior matching expenses.
+
+    Matching rules:
+    - Match on normalized `description`.
+    - A refund can only offset expenses with `completed_date` <= refund `completed_date`.
+    - Allocation order is most-recent-first among eligible expenses (LIFO).
+
+    This function is intentionally used only for aggregated spend metrics.
+    """
+
+    if base.empty:
+        return pd.Series(dtype="float")
+
+    exp = base[base.get("type", "").astype(str).str.casefold().eq("expense")].copy()
+    if exp.empty:
+        return pd.Series(dtype="float")
+
+    exp_amount = pd.to_numeric(exp.get("amount_dkk"), errors="coerce").abs()
+    exp = exp.loc[exp_amount.notna()].copy()
+    if exp.empty:
+        return pd.Series(dtype="float")
+
+    exp["_remaining_spend"] = exp_amount.loc[exp.index].astype(float)
+    exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
+    exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
+
+    ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
+    if ref.empty:
+        return exp["_remaining_spend"]
+
+    ref["_refund_amt"] = pd.to_numeric(ref.get("amount_dkk"), errors="coerce").abs()
+    ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
+    ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
+    ref = ref.loc[
+        ref["_refund_amt"].notna()
+        & ref["_completed"].notna()
+        & ref["_desc_norm"].ne("")
+    ].copy()
+
+    if ref.empty:
+        return exp["_remaining_spend"]
+
+    ref = ref.sort_values(["_completed"], ascending=[True])
+
+    for _idx, refund in ref.iterrows():
+        remaining_refund = float(refund["_refund_amt"])
+        if remaining_refund <= 0:
+            continue
+
+        eligible = exp[
+            exp["_desc_norm"].eq(refund["_desc_norm"])
+            & exp["_completed"].notna()
+            & exp["_completed"].le(refund["_completed"])
+            & exp["_remaining_spend"].gt(0)
+        ]
+        if eligible.empty:
+            continue
+
+        # Most recent eligible expense first.
+        eligible = eligible.sort_values(["_completed"], ascending=[False])
+
+        for idx in eligible.index.tolist():
+            if remaining_refund <= 0:
+                break
+            cur = float(exp.at[idx, "_remaining_spend"])
+            if cur <= 0:
+                continue
+            used = min(cur, remaining_refund)
+            exp.at[idx, "_remaining_spend"] = cur - used
+            remaining_refund -= used
+
+    return exp["_remaining_spend"]
+
+
 @dataclass(frozen=True)
 class PreparedData:
     df: pd.DataFrame
@@ -807,6 +967,7 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
         by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk"])
     else:
         base["month"] = base["completed_date"].dt.to_period("M").astype(str)
+        expense_after_refunds = _expense_spend_after_refunds(base)
 
         types = ["expense", "income", "refund"]
         totals = (
@@ -816,14 +977,26 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
             .sum()
             .unstack(fill_value=0.0)
         )
+
+        # Replace gross expense totals with net expense totals after refund allocation.
+        if not expense_after_refunds.empty:
+            exp_rows = base.loc[expense_after_refunds.index].copy()
+            exp_rows["_net_spend"] = expense_after_refunds
+            net_exp_by_month = exp_rows.groupby("month")["_net_spend"].sum()
+            totals["expense"] = 0.0
+            totals.loc[net_exp_by_month.index, "expense"] = net_exp_by_month.values
+
         for t in types:
             if t not in totals.columns:
                 totals[t] = 0.0
 
         exp = base[base["type"].astype(str).str.casefold().eq("expense")].copy()
         exp = exp[exp.get("category").notna()].copy() if "category" in exp.columns else exp.iloc[0:0]
+        if not exp.empty:
+            exp = exp.loc[exp.index.intersection(expense_after_refunds.index)].copy()
+            exp["_net_spend"] = expense_after_refunds.reindex(exp.index).fillna(0.0)
         by_month_cat = (
-            exp.assign(spend_dkk=lambda x: x["amount_dkk"].abs())
+            exp.assign(spend_dkk=lambda x: x["_net_spend"])
             .groupby(["month", "category"])["spend_dkk"]
             .sum()
             .reset_index()
