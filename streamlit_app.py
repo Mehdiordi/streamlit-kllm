@@ -24,6 +24,7 @@ def fmt_dkk(x: float) -> str:
     return f"{x:,.0f}"
 
 
+
 @st.cache_data(show_spinner=True)
 def load_prepared(csv_path: str, fx_version: float, manual_version: float) -> PreparedData:
     # manual_version exists purely to invalidate the cache when manual_expenses.csv changes
@@ -310,14 +311,15 @@ def month_totals(totals_by_month: pd.DataFrame, month: str) -> tuple[float, floa
     return exp_total, inc_total, ref_total
 
 
-def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int) -> None:
+def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int, has_cross_month: bool = False) -> None:
     # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1
+    cross_month_text = " | <span title='Refunds from previous month(s) applied to this month'>🔄</span>" if has_cross_month else ""
     st.markdown(
         "<small>"
         f"💸 <b>{fmt_dkk(exp_total)}</b> DKK | "
         f"💰 {fmt_dkk(inc_total)} DKK | "
         f"♻️ {fmt_dkk(ref_total)} DKK | "
-        f"📊 {items}"
+        f"📊 {items}{cross_month_text}"
         "</small>",
         unsafe_allow_html=True,
     )
@@ -579,7 +581,11 @@ def main():
                     st.caption("No expense rows for this month.")
                 else:
                     exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
-                    render_month_table_header(exp_total, inc_total, ref_total, items=len(exp_table))
+                    # Check if this month has cross-month refunds
+                    from processing import refund_cross_month_summary
+                    cross_month_summary = refund_cross_month_summary(prepared.df)
+                    has_cross_month = cross_month_summary.get(m, False)
+                    render_month_table_header(exp_total, inc_total, ref_total, items=len(exp_table), has_cross_month=has_cross_month)
 
                     # Show 5 rows worth of height; scroll for the rest.
                     st.dataframe(

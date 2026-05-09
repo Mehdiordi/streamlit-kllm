@@ -773,6 +773,38 @@ def convert_to_dkk(
     return out
 
 
+def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, bool]:
+    """Return True/False per month indicating if any refunds applied to prior months.
+    
+    Example: {'2026-04': False, '2026-05': True} means May has refunds from April expenses.
+    Useful for dashboard indicators.
+    """
+    if base.empty:
+        return {}
+
+    allocations = debug_refund_allocations(base, verbose=False)
+    if allocations.empty:
+        return {}
+
+    allocations['refund_date'] = pd.to_datetime(allocations['refund_date'])
+    allocations['matched_expense_date'] = pd.to_datetime(allocations['matched_expense_date'])
+    allocations['refund_month'] = allocations['refund_date'].dt.to_period('M').astype(str)
+    allocations['expense_month'] = allocations['matched_expense_date'].dt.to_period('M').astype(str)
+    allocations['is_cross_month'] = allocations['refund_month'] != allocations['expense_month']
+
+    cross_month_by_refund_month = (
+        allocations[allocations['is_cross_month']]
+        .groupby('refund_month')
+        .size() > 0
+    )
+
+    summary = {}
+    for month in allocations['refund_month'].unique():
+        summary[month] = bool(cross_month_by_refund_month.get(month, False))
+
+    return summary
+
+
 def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     """DEBUG: Show refund-to-expense allocations.
     
