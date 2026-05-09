@@ -19,6 +19,7 @@ import csv
 from datetime import datetime
 import logging
 import re
+import shutil
 import unicodedata
 from uuid import uuid4
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -34,6 +35,7 @@ DEFAULT_EXPENSE_CATEGORY = "Other"
 EXPENSE_CATEGORY_MAP_PATH = Path(__file__).with_name("expense_categories.yml")
 
 MANUAL_EXPENSES_FILENAME = "manual_expenses.csv"
+MANUAL_EXPENSES_BACKUP_FILENAME = "manual_expenses.backup.csv"
 MANUAL_EXTERNAL_SUFFIX = "-External"
 
 
@@ -115,6 +117,7 @@ def cleanup_outdated_account_statement_csvs(
     """Remove older account-statement CSVs from search_dir.
 
     Only deletes files inside search_dir whose names start with `prefix` and end with `.csv`.
+    Safety guard: never deletes MANUAL_EXPENSES_FILENAME.
     Returns a list of deleted file paths.
     """
 
@@ -131,6 +134,9 @@ def cleanup_outdated_account_statement_csvs(
 
     deleted: list[str] = []
     for p in base.glob("*.csv"):
+        # Hard safety guard for manual data persistence.
+        if p.name == MANUAL_EXPENSES_FILENAME:
+            continue
         if not p.name.startswith(prefix):
             continue
         if keep_resolved is not None:
@@ -562,6 +568,39 @@ def manual_expenses_path(data_dir: str | Path = "data") -> Path:
     return Path(data_dir) / MANUAL_EXPENSES_FILENAME
 
 
+def manual_expenses_backup_path(data_dir: str | Path = "data") -> Path:
+    return Path(data_dir) / MANUAL_EXPENSES_BACKUP_FILENAME
+
+
+def _restore_manual_expenses_from_backup(data_dir: str | Path = "data") -> None:
+    """Restore primary manual expenses file from backup if it was removed."""
+
+    primary = manual_expenses_path(data_dir)
+    backup = manual_expenses_backup_path(data_dir)
+    if primary.exists() or not backup.exists():
+        return
+    try:
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup, primary)
+        logger.warning("Restored manual expenses file from backup: %s", primary)
+    except Exception as e:
+        logger.warning("Failed to restore manual expenses backup: %s", e)
+
+
+def _sync_manual_expenses_backup(data_dir: str | Path = "data") -> None:
+    """Keep a local backup copy of manual expenses for accidental-deletion recovery."""
+
+    primary = manual_expenses_path(data_dir)
+    backup = manual_expenses_backup_path(data_dir)
+    if not primary.exists():
+        return
+    try:
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(primary, backup)
+    except Exception as e:
+        logger.warning("Failed to update manual expenses backup: %s", e)
+
+
 def _ensure_external_suffix(description: object) -> str:
     s = "" if description is None else str(description)
     s = s.strip()
@@ -589,6 +628,7 @@ def load_manual_expenses(data_dir: str | Path = "data") -> pd.DataFrame:
     - source = 'manual'
     """
 
+    _restore_manual_expenses_from_backup(data_dir)
     p = manual_expenses_path(data_dir)
     if not p.exists():
         return pd.DataFrame()
@@ -600,6 +640,8 @@ def load_manual_expenses(data_dir: str | Path = "data") -> pd.DataFrame:
 
     if raw.empty:
         return pd.DataFrame()
+
+    _sync_manual_expenses_backup(data_dir)
 
     df = raw.copy()
     # Normalize column names to snake_case to be forgiving
@@ -697,6 +739,8 @@ def append_manual_expense(
         if write_header:
             w.writeheader()
         w.writerow(row)
+
+    _sync_manual_expenses_backup(data_dir)
 
     return p
 
