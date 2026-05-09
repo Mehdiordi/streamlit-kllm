@@ -10,6 +10,7 @@ from fx_cache import FX_CACHE_TO_CCY, load_fx_cache_series
 import invest_processing as inv
 from processing import (
     PreparedData,
+    add_category_mapping,
     append_manual_expense,
     cleanup_outdated_account_statement_csvs,
     find_latest_account_statement_csv,
@@ -350,6 +351,103 @@ def expenses_table_for_month(df: pd.DataFrame, month: str) -> pd.DataFrame:
     return out
 
 
+def render_other_expenses_editor(other_df: pd.DataFrame) -> None:
+    """Editable table for uncategorized expenses with category assignment."""
+    if other_df.empty:
+        st.write("No expense rows categorized as 'Other'.")
+        return
+
+    other_df = other_df.reset_index().rename(columns={"index": "row"})
+
+    for c in ["completed_date", "started_date"]:
+        if c in other_df.columns:
+            other_df[c] = pd.to_datetime(other_df[c], errors="coerce")
+
+    for c in ["amount", "fee", "amount_net", "conversion_rate", "amount_dkk", "balance"]:
+        if c in other_df.columns:
+            other_df[c] = pd.to_numeric(other_df[c], errors="coerce")
+
+    spend_sort = (
+        pd.to_numeric(other_df.get("amount_dkk"), errors="coerce").abs()
+        if "amount_dkk" in other_df.columns
+        else pd.Series([pd.NA] * len(other_df), index=other_df.index)
+    )
+    fallback = (
+        pd.to_numeric(other_df.get("amount_net"), errors="coerce").abs()
+        if "amount_net" in other_df.columns
+        else pd.Series([pd.NA] * len(other_df), index=other_df.index)
+    )
+    other_df["spend_sort"] = spend_sort.fillna(fallback)
+    other_df = other_df.sort_values(["spend_sort", "completed_date"], ascending=[False, True])
+
+    cols = [
+        "row",
+        "completed_date",
+        "started_date",
+        "sub_type",
+        "description",
+        "currency",
+        "amount",
+        "fee",
+        "amount_net",
+        "conversion_rate",
+        "amount_dkk",
+        "balance",
+    ]
+    cols = [c for c in cols if c in other_df.columns]
+
+    view = other_df[cols].copy()
+    categories = category_options()
+    view["assign_category"] = ""
+
+    st.caption("Assign a category and click Apply Category Changes to save into expense_categories.yml")
+    edited = st.data_editor(
+        view,
+        use_container_width=True,
+        height=260,
+        hide_index=True,
+        key="other_expenses_editor",
+        column_config={
+            "assign_category": st.column_config.SelectboxColumn(
+                "Assign Category",
+                options=categories,
+                help="Choose a category to map this description to",
+            ),
+        },
+        disabled=[c for c in view.columns if c != "assign_category"],
+    )
+
+    changes: dict[str, str] = {}
+    for _, r in edited.iterrows():
+        chosen = str(r.get("assign_category", "")).strip()
+        description = str(r.get("description", "")).strip()
+        if chosen and description:
+            changes[description] = chosen
+
+    st.caption("Preview of mappings to be saved")
+    if changes:
+        preview_df = pd.DataFrame(
+            [{"description": description, "category": category} for description, category in changes.items()]
+        ).sort_values(["category", "description"], ascending=[True, True])
+        st.dataframe(preview_df, use_container_width=True, hide_index=True, height=180)
+    else:
+        st.info("No pending category changes selected yet.")
+
+    if st.button(
+        "Apply Category Changes",
+        type="primary",
+        key="apply_category_changes",
+        disabled=not bool(changes),
+    ):
+
+        for description, chosen in changes.items():
+            add_category_mapping(description, chosen)
+
+        st.success(f"Saved {len(changes)} mapping(s) to expense_categories.yml")
+        st.cache_data.clear()
+        st.rerun()
+
+
 def plot_current_month_budget_progress(df: pd.DataFrame) -> None:
     """Plot allowed cumulative spend vs actual cumulative spend for the current month."""
 
@@ -596,58 +694,7 @@ def main():
                     )
 
         st.subheader("Expenses categorized as Other")
-        other_df = prepared.other_expenses.copy()
-        if other_df.empty:
-            st.write("No expense rows categorized as 'Other'.")
-        else:
-            other_df = other_df.reset_index().rename(columns={"index": "row"})
-
-            # Coerce common types for readability and sorting
-            for c in ["completed_date", "started_date"]:
-                if c in other_df.columns:
-                    other_df[c] = pd.to_datetime(other_df[c], errors="coerce")
-
-            for c in ["amount", "fee", "amount_net", "conversion_rate", "amount_dkk", "balance"]:
-                if c in other_df.columns:
-                    other_df[c] = pd.to_numeric(other_df[c], errors="coerce")
-
-            # Default sort: highest spend first.
-            # Prefer abs(amount_dkk); if missing (e.g., missing completed_date), fall back to abs(amount_net).
-            spend_sort = (
-                pd.to_numeric(other_df.get("amount_dkk"), errors="coerce").abs()
-                if "amount_dkk" in other_df.columns
-                else pd.Series([pd.NA] * len(other_df), index=other_df.index)
-            )
-            fallback = (
-                pd.to_numeric(other_df.get("amount_net"), errors="coerce").abs()
-                if "amount_net" in other_df.columns
-                else pd.Series([pd.NA] * len(other_df), index=other_df.index)
-            )
-            other_df["spend_sort"] = spend_sort.fillna(fallback)
-            other_df = other_df.sort_values(["spend_sort", "completed_date"], ascending=[False, True])
-
-            cols = [
-                "row",
-                "completed_date",
-                "started_date",
-                "sub_type",
-                "description",
-                "currency",
-                "amount",
-                "fee",
-                "amount_net",
-                "conversion_rate",
-                "amount_dkk",
-                "balance",
-            ]
-            cols = [c for c in cols if c in other_df.columns]
-
-            st.dataframe(
-                other_df[cols],
-                use_container_width=True,
-                height=210,
-                hide_index=True,
-            )
+        render_other_expenses_editor(prepared.other_expenses.copy())
 
         st.divider()
         st.subheader("Manual external expenses")

@@ -229,6 +229,41 @@ def classify_type(frame: pd.DataFrame) -> pd.Series:
     return out
 
 
+def get_all_categories(path: str | Path | None = None) -> list[str]:
+    """Return sorted list of all unique categories from expense_categories.yml."""
+    p = Path(path) if path is not None else EXPENSE_CATEGORY_MAP_PATH
+    compiled = load_expense_category_map(p)
+    return sorted({str(category).strip() for _keyword, category in compiled if str(category).strip()})
+
+
+def add_category_mapping(keyword: str, category: str, path: str | Path | None = None) -> None:
+    """Add a new keyword -> category mapping to expense_categories.yml."""
+    p = Path(path) if path is not None else EXPENSE_CATEGORY_MAP_PATH
+    if not p.exists():
+        raise FileNotFoundError(f"Expense categories file not found: {p}")
+
+    keyword_text = str(keyword).strip()
+    category_text = str(category).strip()
+    if not keyword_text or not category_text:
+        return
+
+    current_mapping, _ = _load_expense_config_file(p)
+    if keyword_text in current_mapping and str(current_mapping[keyword_text]).strip() == category_text:
+        return
+
+    escaped_key = keyword_text.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_category = category_text.replace("\\", "\\\\").replace('"', '\\"')
+
+    # Keep comments/order by appending a new mapping line instead of rewriting the whole file.
+    with p.open("a", encoding="utf-8") as f:
+        f.write(f'\n"{escaped_key}": "{escaped_category}"\n')
+
+    global _category_cache
+    _category_cache.clear()
+    global _expense_config_cache
+    _expense_config_cache.clear()
+
+
 def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
     """Return True for rows that should be included in spend/income calculations.
 
