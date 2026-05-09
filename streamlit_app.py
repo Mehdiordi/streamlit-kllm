@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -14,10 +17,15 @@ from processing import (
     append_manual_expense,
     cleanup_outdated_account_statement_csvs,
     find_latest_account_statement_csv,
+    find_latest_savings_statement_csv,
+    load_revolut_csv,
     load_expense_category_map,
     load_manual_expenses,
     load_monthly_limits,
+    normalize_revolut_df,
     prepare_data_for_plotting,
+    refund_cross_month_summary,
+    successful_transaction_mask,
 )
 
 
@@ -185,6 +193,205 @@ def category_options() -> list[str]:
     compiled = load_expense_category_map()
     cats = sorted({cat for _kw, cat in compiled if cat})
     return cats
+
+
+def _fx_rate_on_or_before(series: pd.Series, day: pd.Timestamp) -> float | None:
+    if series is None or series.empty or pd.isna(day):
+        return None
+    s = series.copy().sort_index()
+    d = pd.Timestamp(day).normalize()
+    window = s.loc[s.index <= d]
+    if window.empty:
+        return None
+    v = window.iloc[-1]
+    try:
+        return float(v) if v is not None and not pd.isna(v) else None
+    except Exception:
+        return None
+
+
+def compute_exchange_fx_pnl(account_csv_path: str, data_dir: str = "data") -> tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp]:
+    """Compute P/L for DKK->USD/GBP exchanges valued at today's FX."""
+
+    raw = load_revolut_csv(account_csv_path)
+    df = normalize_revolut_df(raw)
+
+    today = pd.Timestamp.today().normalize()
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), today
+
+    sub_type = df.get("sub_type", pd.Series("", index=df.index, dtype="object")).astype(str)
+    desc = df.get("description", pd.Series("", index=df.index, dtype="object")).astype(str)
+    ccy = df.get("currency", pd.Series("", index=df.index, dtype="object")).astype(str).str.upper().str.strip()
+    amt = pd.to_numeric(df.get("amount_net"), errors="coerce")
+    completed = pd.to_datetime(df.get("completed_date"), errors="coerce")
+    success = successful_transaction_mask(df)
+
+    ex_mask = (
+        sub_type.str.casefold().eq("exchange")
+        & desc.str.contains("Exchanged to", case=False, na=False)
+        & ccy.eq("DKK")
+        & amt.lt(0)
+        & completed.notna()
+        & success
+    )
+    ex = df.loc[ex_mask].copy()
+    if ex.empty:
+        return pd.DataFrame(), pd.DataFrame(), today
+
+    ex["to_currency"] = (
+        ex["description"].astype(str).str.extract(r"Exchanged to\s+([A-Za-z]{3})", expand=False).str.upper()
+    )
+    ex = ex[ex["to_currency"].isin(["USD", "GBP"])].copy()
+    if ex.empty:
+        return pd.DataFrame(), pd.DataFrame(), today
+
+    ex["completed_day"] = pd.to_datetime(ex["completed_date"], errors="coerce").dt.normalize()
+    ex["dkk_out"] = pd.to_numeric(ex["amount_net"], errors="coerce").abs()
+
+    fx_series = {
+        "USD": load_fx_cache_series("USD", data_dir=data_dir, to_ccy=FX_CACHE_TO_CCY),
+        "GBP": load_fx_cache_series("GBP", data_dir=data_dir, to_ccy=FX_CACHE_TO_CCY),
+    }
+
+    ex["fx_at_exchange"] = ex.apply(
+        lambda r: _fx_rate_on_or_before(fx_series.get(str(r["to_currency"])), r["completed_day"]),
+        axis=1,
+    )
+    ex["fx_today"] = ex["to_currency"].map(
+        lambda c: _fx_rate_on_or_before(fx_series.get(str(c)), today)
+    )
+    ex["foreign_bought"] = ex["dkk_out"] / pd.to_numeric(ex["fx_at_exchange"], errors="coerce")
+    ex["dkk_value_today"] = ex["foreign_bought"] * pd.to_numeric(ex["fx_today"], errors="coerce")
+    ex["dkk_pnl"] = ex["dkk_value_today"] - ex["dkk_out"]
+    ex["pnl_pct"] = np.where(ex["dkk_out"] != 0, ex["dkk_pnl"] / ex["dkk_out"], np.nan)
+
+    detail = ex[
+        [
+            "completed_date",
+            "description",
+            "to_currency",
+            "dkk_out",
+            "fx_at_exchange",
+            "foreign_bought",
+            "fx_today",
+            "dkk_value_today",
+            "dkk_pnl",
+            "pnl_pct",
+        ]
+    ].copy()
+    detail = detail.sort_values("completed_date", ascending=True)
+
+    totals = (
+        detail.groupby("to_currency", dropna=False)
+        .agg(
+            dkk_out=("dkk_out", "sum"),
+            foreign_bought=("foreign_bought", "sum"),
+            dkk_value_today=("dkk_value_today", "sum"),
+            dkk_pnl=("dkk_pnl", "sum"),
+        )
+        .reset_index()
+    )
+    totals["pnl_pct"] = np.where(totals["dkk_out"] != 0, totals["dkk_pnl"] / totals["dkk_out"], np.nan)
+
+    return detail, totals, today
+
+
+def _to_float_from_csv(value: object) -> float | None:
+    s = str(value or "").strip().replace(",", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def compute_savings_interest_summary(savings_csv_path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute net interest by matching Interest PAID and Service Fee Charged rows per timestamp/currency."""
+
+    rows: list[dict[str, object]] = []
+    active_currency: str | None = None
+
+    with open(savings_csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
+                continue
+            first = str(row[0]).strip()
+            second = str(row[1]).strip() if len(row) > 1 else ""
+            if first == "Date" and second == "Description":
+                joined = " ".join(str(x) for x in row)
+                if "Value, USD" in joined:
+                    active_currency = "USD"
+                elif "Value, GBP" in joined:
+                    active_currency = "GBP"
+                else:
+                    active_currency = None
+                continue
+
+            if active_currency not in {"USD", "GBP"}:
+                continue
+            if len(row) < 5:
+                continue
+
+            dt = pd.to_datetime(first, errors="coerce")
+            description = second
+            foreign_value = _to_float_from_csv(row[2])
+            dkk_value = _to_float_from_csv(row[3]) if len(row) > 3 else None
+            fx_rate = _to_float_from_csv(row[4]) if len(row) > 4 else None
+            if pd.isna(dt) or not description or foreign_value is None or dkk_value is None:
+                continue
+
+            if description.startswith(f"Interest PAID {active_currency}"):
+                entry_type = "interest"
+            elif description.startswith(f"Service Fee Charged {active_currency}"):
+                entry_type = "fee"
+            else:
+                continue
+
+            rows.append(
+                {
+                    "datetime": dt,
+                    "currency": active_currency,
+                    "entry_type": entry_type,
+                    "foreign_value": float(foreign_value),
+                    "dkk_value": float(dkk_value),
+                    "fx_rate": float(fx_rate) if fx_rate is not None else None,
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(), pd.DataFrame()
+
+    raw = pd.DataFrame(rows)
+    detail = (
+        raw.groupby(["datetime", "currency"], dropna=False)
+        .agg(
+            interest_foreign=("foreign_value", lambda s: float(s[raw.loc[s.index, "entry_type"].eq("interest")].sum())),
+            fee_foreign=("foreign_value", lambda s: float(s[raw.loc[s.index, "entry_type"].eq("fee")].sum())),
+            interest_dkk=("dkk_value", lambda s: float(s[raw.loc[s.index, "entry_type"].eq("interest")].sum())),
+            fee_dkk=("dkk_value", lambda s: float(s[raw.loc[s.index, "entry_type"].eq("fee")].sum())),
+            fx_rate=("fx_rate", "last"),
+        )
+        .reset_index()
+    )
+    detail["net_foreign"] = detail["interest_foreign"] + detail["fee_foreign"]
+    detail["net_dkk"] = detail["interest_dkk"] + detail["fee_dkk"]
+    detail = detail.sort_values("datetime", ascending=False)
+
+    totals = (
+        detail.groupby("currency", dropna=False)
+        .agg(
+            interest_foreign=("interest_foreign", "sum"),
+            fee_foreign=("fee_foreign", "sum"),
+            net_foreign=("net_foreign", "sum"),
+            net_dkk=("net_dkk", "sum"),
+        )
+        .reset_index()
+        .sort_values("currency")
+    )
+    return detail, totals
 
 
 @st.cache_resource
@@ -667,31 +874,45 @@ def main():
             return
 
         months = sorted(prepared.spend_by_month_category["month"].unique().tolist(), reverse=True)
+        cross_month_summary = refund_cross_month_summary(prepared.df)
 
-        # Three-column layout (newest month first)
-        cols = st.columns(3)
-        for idx, m in enumerate(months):
-            with cols[idx % 3]:
-                plot_month(prepared.spend_by_month_category, prepared.totals_by_month, m)
+        # Three-column layout with row separators (newest month first)
+        row_size = 3
+        for row_start in range(0, len(months), row_size):
+            row_months = months[row_start : row_start + row_size]
+            cols = st.columns(row_size)
 
-                exp_table = expenses_table_for_month(prepared.df, m)
-                if exp_table.empty:
-                    st.caption("No expense rows for this month.")
-                else:
-                    exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
-                    # Check if this month has cross-month refunds
-                    from processing import refund_cross_month_summary
-                    cross_month_summary = refund_cross_month_summary(prepared.df)
-                    has_cross_month = cross_month_summary.get(m, False)
-                    render_month_table_header(exp_total, inc_total, ref_total, items=len(exp_table), has_cross_month=has_cross_month)
+            for col_idx, m in enumerate(row_months):
+                with cols[col_idx]:
+                    plot_month(prepared.spend_by_month_category, prepared.totals_by_month, m)
 
-                    # Show 5 rows worth of height; scroll for the rest.
-                    st.dataframe(
-                        exp_table,
-                        use_container_width=True,
-                        height=290,
-                        hide_index=True,
-                    )
+                    exp_table = expenses_table_for_month(prepared.df, m)
+                    if exp_table.empty:
+                        st.caption("No expense rows for this month.")
+                    else:
+                        exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
+                        has_cross_month = cross_month_summary.get(m, False)
+                        render_month_table_header(
+                            exp_total,
+                            inc_total,
+                            ref_total,
+                            items=len(exp_table),
+                            has_cross_month=has_cross_month,
+                        )
+
+                        # Show 5 rows worth of height; scroll for the rest.
+                        st.dataframe(
+                            exp_table,
+                            use_container_width=True,
+                            height=290,
+                            hide_index=True,
+                        )
+
+            # Distinct separation between this row of tables and the next row of charts.
+            if row_start + row_size < len(months):
+                st.markdown("<div style='margin: 0.4rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
+                st.divider()
+                st.markdown("<div style='margin: 0.2rem 0 0.6rem 0;'></div>", unsafe_allow_html=True)
 
         st.subheader("Expenses categorized as Other")
         render_other_expenses_editor(prepared.other_expenses.copy())
@@ -766,210 +987,254 @@ def main():
                     st.rerun()
 
     with tabs[1]:
-        st.subheader("Investment")
+        st.subheader("Investment FX P/L (DKK -> USD/GBP)")
+        st.caption("Only exchange-out rows are included: sub_type=Exchange, description contains 'Exchanged to', currency=DKK, amount_net<0.")
 
-        try:
-            consolidated_csv_path = inv.find_latest_consolidated_statement_csv("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents")
-        except Exception as e:
-            st.error(f"Missing consolidated statement CSV: {e}")
+        detail, totals, as_of = compute_exchange_fx_pnl(account_csv_path=csv_path, data_dir="data")
+        st.caption(f"As of: {as_of.date()}")
+
+        if detail.empty:
+            st.info("No qualifying DKK->USD/GBP exchange transactions found in the account statement.")
             return
 
-        st.caption(f"Account CSV: {csv_path}")
-        st.caption(f"Investment CSV: {consolidated_csv_path}")
+        total_dkk_out = float(pd.to_numeric(totals.get("dkk_out"), errors="coerce").sum())
+        total_dkk_value_today = float(pd.to_numeric(totals.get("dkk_value_today"), errors="coerce").sum())
+        total_pnl = total_dkk_value_today - total_dkk_out
+        total_pct = (total_pnl / total_dkk_out) if total_dkk_out else 0.0
 
-        summary_data = load_investment_summary(
-            account_csv_path=csv_path,
-            consolidated_csv_path=consolidated_csv_path,
-            fx_version=fx_version,
-            account_version=file_mtime(csv_path),
-            consolidated_version=file_mtime(consolidated_csv_path),
+        st.metric(
+            "Unrealised FX Gain/Loss on DKK→USD/GBP exchanges (at today's rate)",
+            f"{fmt_dkk(total_pnl)} DKK",
+            delta=f"{total_pct * 100:.2f}%",
         )
 
-        summary_df = summary_data.get("summary")
-        today = summary_data.get("today")
-        invest_max_date = summary_data.get("invest_max_date")
+        totals_view = totals[["to_currency", "dkk_pnl", "pnl_pct"]].copy()
+        totals_view = totals_view.rename(columns={"to_currency": "currency", "dkk_pnl": "gain_loss_dkk", "pnl_pct": "pnl_pct"})
+        totals_view["gain_loss_dkk"] = totals_view["gain_loss_dkk"].map(lambda x: fmt_dkk(float(x)))
+        totals_view["pnl_pct"] = totals_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%")
 
-        # Display max transaction date
-        if invest_max_date is not None and pd.notna(invest_max_date):
-            st.info(f"📅 Latest transaction: {invest_max_date.strftime('%B %d, %Y at %H:%M')}")
+        st.markdown("### By Currency")
+        st.dataframe(totals_view, use_container_width=True, hide_index=True)
 
-        if isinstance(today, pd.Timestamp):
-            st.caption(f"As of: {today.date()}")
+        detail_view = detail.copy()
+        detail_view = detail_view.rename(
+            columns={
+                "completed_date": "datetime",
+                "to_currency": "to_ccy",
+                "dkk_out": "dkk_exchanged",
+                "fx_at_exchange": "fx_dkk_per_ccy_at_trade",
+                "foreign_bought": "ccy_bought",
+                "fx_today": "fx_dkk_per_ccy_today",
+                "dkk_value_today": "dkk_value_today",
+                "dkk_pnl": "dkk_gain_loss",
+                "pnl_pct": "pnl_pct",
+            }
+        )
+        detail_view["pnl_pct"] = detail_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%" if pd.notna(x) else "")
 
-        if not isinstance(summary_df, pd.DataFrame) or summary_df.empty:
-            st.info("No summary data found in consolidated statement.")
+        st.divider()
+        st.markdown("### Savings Interest Net of Fees")
+
+        savings_search_dir = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents"
+        try:
+            savings_csv_path = find_latest_savings_statement_csv(savings_search_dir)
+            cleanup_outdated_account_statement_csvs(
+                savings_search_dir,
+                keep_path=savings_csv_path,
+                prefix="savings-statement",
+            )
+            st.caption(f"Savings CSV: {savings_csv_path}")
+        except Exception as e:
+            st.info(f"No savings statement found: {e}")
             return
 
-        # Extract key metrics by section and convert to DKK
-        metrics = {}
-        fx_rates = {}
-        
-        # Get FX rates for today (or most recent available)
-        for ccy in ["USD", "GBP"]:
-            s = load_fx_cache_series(ccy, data_dir="data", to_ccy=FX_CACHE_TO_CCY)
-            if not s.empty:
-                # Try today first, fall back to most recent available
-                rate_val = s.get(pd.Timestamp.today().normalize())
-                if rate_val is None or pd.isna(rate_val):
-                    # Use the most recent available rate
-                    rate_val = s.iloc[-1]
-                fx_rates[ccy] = float(rate_val) if rate_val is not None and not pd.isna(rate_val) else None
-            else:
-                fx_rates[ccy] = None
-        
-        # Parse summary data by section
-        for section in summary_df["section"].unique():
-            section_data = summary_df[summary_df["section"] == section]
-            metrics[section] = {}
-            for _, row in section_data.iterrows():
-                desc = row["description"]
-                metrics[section][desc] = {
-                    "value": row["value"],
-                    "currency": row["currency"],
-                    "amount_str": row["amount"]
-                }
+        savings_detail, savings_totals = compute_savings_interest_summary(savings_csv_path)
+        if savings_detail.empty or savings_totals.empty:
+            st.info("No qualifying 'Interest PAID USD/GBP' rows were found in the savings statement.")
+            return
 
-        # === GBP Cash Funds Table ===
-        gbp_rows = []
-        gbp_dkk_totals = {}
-        if "Flexible Cash Funds - GBP" in metrics:
-            st.markdown("### GBP Cash Funds")
-            gbp_data = metrics["Flexible Cash Funds - GBP"]
-            
-            for desc, data in gbp_data.items():
-                val = data.get("value", 0) or 0
-                ccy = data.get("currency", "GBP")
-                dkk_val = val * fx_rates.get("GBP", 0) if fx_rates.get("GBP") else 0
-                gbp_rows.append({
-                    "Description": desc,
-                    f"Amount ({ccy})": f"{val:,.2f}",
-                    "Value (DKK)": dkk_val
-                })
-                gbp_dkk_totals[desc] = dkk_val
-            
-            gbp_df = pd.DataFrame(gbp_rows)
-            gbp_df["Value (DKK)"] = gbp_df["Value (DKK)"].apply(fmt_dkk)
-            st.dataframe(gbp_df, use_container_width=True, hide_index=True)
-        
-        # === USD Cash Funds Table ===
-        usd_rows = []
-        usd_dkk_totals = {}
-        if "Flexible Cash Funds - USD" in metrics:
-            st.markdown("### USD Cash Funds")
-            usd_data = metrics["Flexible Cash Funds - USD"]
-            
-            for desc, data in usd_data.items():
-                val = data.get("value", 0) or 0
-                ccy = data.get("currency", "USD")
-                dkk_val = val * fx_rates.get("USD", 0) if fx_rates.get("USD") else 0
-                usd_rows.append({
-                    "Description": desc,
-                    f"Amount ({ccy})": f"{val:,.2f}",
-                    "Value (DKK)": dkk_val
-                })
-                usd_dkk_totals[desc] = dkk_val
-            
-            usd_df = pd.DataFrame(usd_rows)
-            usd_df["Value (DKK)"] = usd_df["Value (DKK)"].apply(fmt_dkk)
-            st.dataframe(usd_df, use_container_width=True, hide_index=True)
+        usd_net_dkk = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("USD"), "net_dkk"],
+                errors="coerce",
+            ).sum()
+        )
+        gbp_net_dkk = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("GBP"), "net_dkk"],
+                errors="coerce",
+            ).sum()
+        )
+        usd_net_foreign = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("USD"), "net_foreign"],
+                errors="coerce",
+            ).sum()
+        )
+        gbp_net_foreign = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("GBP"), "net_foreign"],
+                errors="coerce",
+            ).sum()
+        )
+        usd_interest_foreign = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("USD"), "interest_foreign"],
+                errors="coerce",
+            ).sum()
+        )
+        gbp_interest_foreign = float(
+            pd.to_numeric(
+                savings_totals.loc[savings_totals["currency"].eq("GBP"), "interest_foreign"],
+                errors="coerce",
+            ).sum()
+        )
+        usd_fee_foreign = abs(
+            float(
+                pd.to_numeric(
+                    savings_totals.loc[savings_totals["currency"].eq("USD"), "fee_foreign"],
+                    errors="coerce",
+                ).sum()
+            )
+        )
+        gbp_fee_foreign = abs(
+            float(
+                pd.to_numeric(
+                    savings_totals.loc[savings_totals["currency"].eq("GBP"), "fee_foreign"],
+                    errors="coerce",
+                ).sum()
+            )
+        )
+        dkk_net = float(pd.to_numeric(savings_totals["net_dkk"], errors="coerce").sum())
 
-        # === Combined Summary Table (DKK) ===
-        st.markdown("### Combined Summary (DKK)")
-        
-        # Get all unique descriptions from both tables
-        all_descriptions = set()
-        if gbp_dkk_totals:
-            all_descriptions.update(gbp_dkk_totals.keys())
-        if usd_dkk_totals:
-            all_descriptions.update(usd_dkk_totals.keys())
-        
-        summary_rows = []
-        combined_metrics = {}  # For saving to history
-        for desc in sorted(all_descriptions):
-            gbp_val = gbp_dkk_totals.get(desc, 0)
-            usd_val = usd_dkk_totals.get(desc, 0)
-            total_val = gbp_val + usd_val
-            summary_rows.append({
-                "Description": desc,
-                "GBP (DKK)": fmt_dkk(gbp_val),
-                "USD (DKK)": fmt_dkk(usd_val),
-                "Total (DKK)": fmt_dkk(total_val)
-            })
-            combined_metrics[desc] = total_val
-        
-        if summary_rows:
-            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-        
-        # === Save snapshot to history ===
-        snapshot_date = inv.extract_end_date_from_filename(consolidated_csv_path)
-        if snapshot_date is not None and combined_metrics:
-            try:
-                inv.save_investment_snapshot(
-                    snapshot_date=snapshot_date,
-                    summary_metrics=combined_metrics,
-                    history_file="data/investment_history.csv"
-                )
-            except Exception as e:
-                st.warning(f"Could not save investment snapshot: {e}")
-        
-        # === Portfolio Growth Chart ===
-        try:
-            history_df = inv.load_investment_history("data/investment_history.csv")
-            
-            if not history_df.empty and len(history_df) >= 4 and "Closing balance" in history_df.columns:
-                st.markdown("### Portfolio Growth Over Time")
-                
-                # Prepare data for plotting
-                plot_df = history_df[['date', 'Closing balance']].dropna()
-                
-                if len(plot_df) >= 4:
-                    fig, ax = plt.subplots(figsize=(12, 6))
-                    
-                    # Plot line with markers
-                    ax.plot(plot_df['date'], plot_df['Closing balance'], 
-                           marker='o', linewidth=2, markersize=8, 
-                           color='#4ECDC4', label='Closing Balance')
-                    
-                    # Format
-                    ax.set_xlabel('Date', fontsize=12)
-                    ax.set_ylabel('Portfolio Value (DKK)', fontsize=12)
-                    ax.set_title('Portfolio Closing Balance Over Time', fontsize=14, weight='bold')
-                    ax.grid(True, alpha=0.3)
-                    ax.legend()
-                    
-                    # Format y-axis with thousands separator
-                    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:,.0f}'))
-                    
-                    # Rotate x-axis labels for better readability
-                    plt.xticks(rotation=45, ha='right')
-                    
-                    # Tight layout to prevent label cutoff
-                    plt.tight_layout()
-                    
-                    st.pyplot(fig)
-                    plt.close(fig)
-                    
-                    # Show growth statistics
-                    if len(plot_df) >= 2:
-                        first_val = plot_df.iloc[0]['Closing balance']
-                        last_val = plot_df.iloc[-1]['Closing balance']
-                        change = last_val - first_val
-                        pct_change = (change / first_val * 100) if first_val != 0 else 0
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Starting Balance", f"{fmt_dkk(first_val)} DKK")
-                        with col2:
-                            st.metric("Current Balance", f"{fmt_dkk(last_val)} DKK")
-                        with col3:
-                            st.metric("Total Growth", f"{fmt_dkk(change)} DKK", 
-                                     delta=f"{pct_change:.2f}%")
-                else:
-                    st.info(f"Portfolio growth chart will appear after recording 4 snapshots (currently: {len(plot_df)})")
-            else:
-                st.info("Portfolio growth chart will appear after recording 4 snapshots with closing balance data.")
-        except Exception as e:
-            st.warning(f"Could not load investment history: {e}")
+        today_fx_day = pd.Timestamp.today().normalize()
+        usd_today_rate = _fx_rate_on_or_before(
+            load_fx_cache_series("USD", data_dir="data", to_ccy=FX_CACHE_TO_CCY),
+            today_fx_day,
+        )
+        gbp_today_rate = _fx_rate_on_or_before(
+            load_fx_cache_series("GBP", data_dir="data", to_ccy=FX_CACHE_TO_CCY),
+            today_fx_day,
+        )
+        usd_today_dkk = usd_net_foreign * float(usd_today_rate) if usd_today_rate is not None else np.nan
+        gbp_today_dkk = gbp_net_foreign * float(gbp_today_rate) if gbp_today_rate is not None else np.nan
+        usd_delta_dkk = usd_today_dkk - usd_net_dkk if pd.notna(usd_today_dkk) else np.nan
+        gbp_delta_dkk = gbp_today_dkk - gbp_net_dkk if pd.notna(gbp_today_dkk) else np.nan
+
+        def render_today_delta(today_value_dkk: float, delta_dkk: float) -> None:
+            if pd.isna(today_value_dkk) or pd.isna(delta_dkk):
+                st.caption("Today FX value unavailable")
+                return
+            color = "#22c55e" if delta_dkk > 0 else "#ef4444" if delta_dkk < 0 else "#9ca3af"
+            sign = "+" if delta_dkk > 0 else ""
+            st.markdown(
+                (
+                    "<div style='font-size:0.82rem; color:{color}; margin-top:-0.45rem;'>"
+                    "Today: {today} DKK ({sign}{delta} DKK)"
+                    "</div>"
+                ).format(
+                    color=color,
+                    today=fmt_dkk(float(today_value_dkk)),
+                    sign=sign,
+                    delta=fmt_dkk(float(delta_dkk)),
+                ),
+                unsafe_allow_html=True,
+            )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("USD Net Interest", f"{fmt_dkk(usd_net_dkk)} DKK")
+            st.caption(f"{usd_net_foreign:,.4f} USD")
+            render_today_delta(usd_today_dkk, usd_delta_dkk)
+        with c2:
+            st.metric("GBP Net Interest", f"{fmt_dkk(gbp_net_dkk)} DKK")
+            st.caption(f"{gbp_net_foreign:,.4f} GBP")
+            render_today_delta(gbp_today_dkk, gbp_delta_dkk)
+        with c3:
+            combined_today = (usd_today_dkk if pd.notna(usd_today_dkk) else 0.0) + \
+                             (gbp_today_dkk if pd.notna(gbp_today_dkk) else 0.0)
+            combined_delta = combined_today - dkk_net
+            delta_sign = "+" if combined_delta >= 0 else ""
+            st.metric(
+                "Net Interest in DKK",
+                f"{fmt_dkk(combined_today)} DKK",
+                delta=f"{delta_sign}{fmt_dkk(combined_delta)} DKK",
+            )
+
+        savings_detail_view = savings_detail.copy()
+        savings_detail_view["interest_foreign"] = savings_detail_view.apply(
+            lambda r: f"{float(r['interest_foreign']):,.4f} {r['currency']}", axis=1
+        )
+        savings_detail_view["fee_foreign"] = savings_detail_view.apply(
+            lambda r: f"{float(r['fee_foreign']):,.4f} {r['currency']}", axis=1
+        )
+        savings_detail_view["net_foreign"] = savings_detail_view.apply(
+            lambda r: f"{float(r['net_foreign']):,.4f} {r['currency']}", axis=1
+        )
+        savings_detail_view["fx_rate"] = savings_detail_view["fx_rate"].map(lambda x: f"{float(x):.4f}")
+        savings_detail_view["net_dkk"] = savings_detail_view["net_dkk"].map(lambda x: fmt_dkk(float(x)))
+
+        # --- Bar chart: Net Interest in DKK per month ---
+        chart_df = savings_detail.copy()
+        chart_df["month"] = pd.to_datetime(chart_df["datetime"]).dt.to_period("M")
+        monthly = (
+            chart_df.groupby("month", dropna=False)["net_dkk"]
+            .sum()
+            .reset_index()
+            .sort_values("month", ascending=True)
+        )
+        monthly["month_label"] = monthly["month"].dt.strftime("%b %Y")
+        monthly["net_dkk"] = pd.to_numeric(monthly["net_dkk"], errors="coerce").fillna(0.0)
+
+        n = len(monthly)
+        bar_h = 0.45
+        bg = "#0e1117"
+        accent = "#21c55d"
+        muted = "#94a3b8"
+
+        fig_sav, ax_sav = plt.subplots(figsize=(5, max(1.6, n * 0.55 + 0.5)))
+        fig_sav.patch.set_facecolor(bg)
+        ax_sav.set_facecolor(bg)
+
+        bars = ax_sav.barh(
+            monthly["month_label"],
+            monthly["net_dkk"],
+            height=bar_h,
+            color=accent,
+            alpha=0.88,
+            linewidth=0,
+        )
+
+        x_max = monthly["net_dkk"].max() * 1.22 if monthly["net_dkk"].max() > 0 else 1
+        ax_sav.set_xlim(0, x_max)
+
+        for bar, val in zip(bars, monthly["net_dkk"]):
+            ax_sav.text(
+                bar.get_width() + x_max * 0.015,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:,.0f} DKK",
+                va="center",
+                ha="left",
+                fontsize=8,
+                color=muted,
+                fontweight="normal",
+            )
+
+        ax_sav.set_xlabel("")
+        ax_sav.set_title("Net Interest per Month", color="white", fontsize=10, pad=8, loc="left")
+        ax_sav.tick_params(axis="y", colors="white", labelsize=8, length=0, pad=6)
+        ax_sav.tick_params(axis="x", colors=muted, labelsize=7, length=0)
+        ax_sav.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}"))
+        for spine in ax_sav.spines.values():
+            spine.set_visible(False)
+        ax_sav.xaxis.grid(True, color="#1e293b", linewidth=0.7, zorder=0)
+        ax_sav.set_axisbelow(True)
+
+        plt.tight_layout(pad=0.6)
+        col_chart, _ = st.columns([2, 1])
+        with col_chart:
+            st.pyplot(fig_sav)
+        plt.close(fig_sav)
 
 
 if __name__ == "__main__":

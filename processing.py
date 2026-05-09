@@ -75,21 +75,16 @@ def _to_float_maybe(value: object) -> float | None:
     return None
 
 
-def find_latest_account_statement_csv(search_dir: str = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents") -> str:
-    """Pick the most recent Revolut export CSV containing 'account-statement'.
-
-    Preference order:
-    1) Newest date found in filename (typically the end date in Revolut exports)
-    2) Newest file modified time as a fallback
-    """
+def _find_latest_statement_csv(search_dir: str, name_contains: str) -> str:
+    """Pick the most recent statement CSV whose filename contains the given token."""
 
     base = Path(search_dir)
     if not base.exists() or not base.is_dir():
         raise FileNotFoundError(f"Folder not found: {base}")
 
-    candidates = [p for p in base.glob("*.csv") if "account-statement" in p.name]
+    candidates = [p for p in base.glob("*.csv") if name_contains in p.name]
     if not candidates:
-        raise FileNotFoundError(f"No CSV files containing 'account-statement' in {base}")
+        raise FileNotFoundError(f"No CSV files containing '{name_contains}' in {base}")
 
     date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -107,6 +102,23 @@ def find_latest_account_statement_csv(search_dir: str = "/Users/mehdiordikhani/L
 
     best = sorted(candidates, key=sort_key, reverse=True)[0]
     return str(best.as_posix())
+
+
+def find_latest_account_statement_csv(search_dir: str = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents") -> str:
+    """Pick the most recent Revolut export CSV containing 'account-statement'.
+
+    Preference order:
+    1) Newest date found in filename (typically the end date in Revolut exports)
+    2) Newest file modified time as a fallback
+    """
+
+    return _find_latest_statement_csv(search_dir, "account-statement")
+
+
+def find_latest_savings_statement_csv(search_dir: str = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents") -> str:
+    """Pick the most recent savings statement CSV containing 'savings-statement'."""
+
+    return _find_latest_statement_csv(search_dir, "savings-statement")
 
 
 def cleanup_outdated_account_statement_csvs(
