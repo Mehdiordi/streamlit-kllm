@@ -214,7 +214,8 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     grid = "#374151"  # subtle grid
     bar = "#621b09"  # red bars
 
-    fig_h = max(3.0, 0.33 * len(s))
+    # Use consistent minimum height for better alignment, but allow growth
+    fig_h = max(4.5, 0.40 * len(s))
     fig, ax = plt.subplots(figsize=(5.8, fig_h), dpi=120)
     fig.patch.set_facecolor(bg)
     ax.set_facecolor(bg)
