@@ -997,41 +997,6 @@ def main():
             st.info("No qualifying DKK->USD/GBP exchange transactions found in the account statement.")
             return
 
-        total_dkk_out = float(pd.to_numeric(totals.get("dkk_out"), errors="coerce").sum())
-        total_dkk_value_today = float(pd.to_numeric(totals.get("dkk_value_today"), errors="coerce").sum())
-        total_pnl = total_dkk_value_today - total_dkk_out
-        total_pct = (total_pnl / total_dkk_out) if total_dkk_out else 0.0
-
-        st.metric(
-            "Unrealised FX Gain/Loss on DKK→USD/GBP exchanges (at today's rate)",
-            f"{fmt_dkk(total_pnl)} DKK",
-            delta=f"{total_pct * 100:.2f}%",
-        )
-
-        totals_view = totals[["to_currency", "dkk_pnl", "pnl_pct"]].copy()
-        totals_view = totals_view.rename(columns={"to_currency": "currency", "dkk_pnl": "gain_loss_dkk", "pnl_pct": "pnl_pct"})
-        totals_view["gain_loss_dkk"] = totals_view["gain_loss_dkk"].map(lambda x: fmt_dkk(float(x)))
-        totals_view["pnl_pct"] = totals_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%")
-
-        st.markdown("### By Currency")
-        st.dataframe(totals_view, use_container_width=True, hide_index=True)
-
-        detail_view = detail.copy()
-        detail_view = detail_view.rename(
-            columns={
-                "completed_date": "datetime",
-                "to_currency": "to_ccy",
-                "dkk_out": "dkk_exchanged",
-                "fx_at_exchange": "fx_dkk_per_ccy_at_trade",
-                "foreign_bought": "ccy_bought",
-                "fx_today": "fx_dkk_per_ccy_today",
-                "dkk_value_today": "dkk_value_today",
-                "dkk_pnl": "dkk_gain_loss",
-                "pnl_pct": "pnl_pct",
-            }
-        )
-        detail_view["pnl_pct"] = detail_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%" if pd.notna(x) else "")
-
         st.divider()
         st.markdown("### Savings Interest Net of Fees")
 
@@ -1187,12 +1152,12 @@ def main():
         monthly["net_dkk"] = pd.to_numeric(monthly["net_dkk"], errors="coerce").fillna(0.0)
 
         n = len(monthly)
-        bar_h = 0.45
+        bar_h = 0.28
         bg = "#0e1117"
-        accent = "#21c55d"
+        accent = "#22c55e"
         muted = "#94a3b8"
 
-        fig_sav, ax_sav = plt.subplots(figsize=(5, max(1.6, n * 0.55 + 0.5)))
+        fig_sav, ax_sav = plt.subplots(figsize=(4.2, max(1.15, n * 0.36 + 0.25)))
         fig_sav.patch.set_facecolor(bg)
         ax_sav.set_facecolor(bg)
 
@@ -1201,40 +1166,76 @@ def main():
             monthly["net_dkk"],
             height=bar_h,
             color=accent,
-            alpha=0.88,
+            alpha=0.82,
             linewidth=0,
         )
 
-        x_max = monthly["net_dkk"].max() * 1.22 if monthly["net_dkk"].max() > 0 else 1
+        x_max = monthly["net_dkk"].max() * 1.14 if monthly["net_dkk"].max() > 0 else 1
         ax_sav.set_xlim(0, x_max)
 
         for bar, val in zip(bars, monthly["net_dkk"]):
             ax_sav.text(
                 bar.get_width() + x_max * 0.015,
                 bar.get_y() + bar.get_height() / 2,
-                f"{val:,.0f} DKK",
+                f"{val:,.0f}",
                 va="center",
                 ha="left",
-                fontsize=8,
+                fontsize=7,
                 color=muted,
                 fontweight="normal",
             )
 
         ax_sav.set_xlabel("")
-        ax_sav.set_title("Net Interest per Month", color="white", fontsize=10, pad=8, loc="left")
-        ax_sav.tick_params(axis="y", colors="white", labelsize=8, length=0, pad=6)
-        ax_sav.tick_params(axis="x", colors=muted, labelsize=7, length=0)
+        ax_sav.set_title("Net Interest per Month", color="white", fontsize=9, pad=5, loc="left")
+        ax_sav.tick_params(axis="y", colors="white", labelsize=7.5, length=0, pad=4)
+        ax_sav.tick_params(axis="x", colors=muted, labelsize=6.5, length=0)
         ax_sav.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}"))
         for spine in ax_sav.spines.values():
             spine.set_visible(False)
-        ax_sav.xaxis.grid(True, color="#1e293b", linewidth=0.7, zorder=0)
+        ax_sav.xaxis.grid(True, color="#1e293b", linewidth=0.45, alpha=0.8, zorder=0)
         ax_sav.set_axisbelow(True)
 
-        plt.tight_layout(pad=0.6)
-        col_chart, _ = st.columns([2, 1])
+        plt.tight_layout(pad=0.35)
+        col_chart, _ = st.columns([1.45, 1.55])
         with col_chart:
             st.pyplot(fig_sav)
         plt.close(fig_sav)
+
+        total_dkk_out = float(pd.to_numeric(totals.get("dkk_out"), errors="coerce").sum())
+        total_dkk_value_today = float(pd.to_numeric(totals.get("dkk_value_today"), errors="coerce").sum())
+        total_pnl = total_dkk_value_today - total_dkk_out
+        total_pct = (total_pnl / total_dkk_out) if total_dkk_out else 0.0
+
+        st.metric(
+            "Unrealised FX Gain/Loss on DKK→USD/GBP exchanges (at today's rate)",
+            f"{fmt_dkk(total_pnl)} DKK",
+            delta=f"{total_pct * 100:.2f}%",
+        )
+
+        totals_view = totals[["to_currency", "dkk_pnl", "pnl_pct"]].copy()
+        totals_view = totals_view.rename(columns={"to_currency": "currency", "dkk_pnl": "gain_loss_dkk", "pnl_pct": "pnl_pct"})
+        totals_view["gain_loss_dkk"] = totals_view["gain_loss_dkk"].map(lambda x: fmt_dkk(float(x)))
+        totals_view["pnl_pct"] = totals_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%")
+
+        st.markdown("### By Currency")
+        st.dataframe(totals_view, use_container_width=True, hide_index=True)
+
+        detail_view = detail.copy()
+        detail_view = detail_view.rename(
+            columns={
+                "completed_date": "datetime",
+                "to_currency": "to_ccy",
+                "dkk_out": "dkk_exchanged",
+                "fx_at_exchange": "fx_dkk_per_ccy_at_trade",
+                "foreign_bought": "ccy_bought",
+                "fx_today": "fx_dkk_per_ccy_today",
+                "dkk_value_today": "dkk_value_today",
+                "dkk_pnl": "dkk_gain_loss",
+                "pnl_pct": "pnl_pct",
+            }
+        )
+        detail_view["pnl_pct"] = detail_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%" if pd.notna(x) else "")
+
 
 
 if __name__ == "__main__":
