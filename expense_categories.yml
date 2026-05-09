@@ -47,6 +47,7 @@ December: 21000
 "Mob.pay Nan Lygten": "Groceries"
 "Carlsro Super Let-Køb A/S": "Groceries"
 "Anywhere": "Groceries"
+"Saigon 45": "Groceries"
 
 # Pet
 "zooplus": "Pet"
@@ -71,6 +72,7 @@ December: 21000
 "rink": "Ice Hockey"
 "Mob.pay Pige Camp 2025": "Ice Hockey"
 "Copenhagen Falcon": "Ice Hockey"
+"Mob.pay Rsik Kiosk": "Ice Hockey"
 
 # Fuel
 "uno-x": "Fuel"
@@ -103,6 +105,7 @@ December: 21000
 "car wash": "Car service"
 "wash": "Car service"
 "synshal": "Car service"
+"EasyPark": "Car service"
 
 # Maintenance
 "thansen": "Maintenance"
@@ -125,6 +128,7 @@ December: 21000
 
 # Eat Out
 "det gronne kokken rodo": "Eat Out"
+"Det Gronne Kokken": "Eat Out"
 "wolt": "Eat Out"
 "just eat": "Eat Out"
 "justeat": "Eat Out"
@@ -140,6 +144,7 @@ December: 21000
 "bar ": "Eat Out"
 "novo nordisk": "Eat Out"
 "Subway": "Eat Out"
+"Mob.pay Alireza Kashan": "Eat Out"
 
 # Shopping
 "amazon": "Shopping"
@@ -156,6 +161,10 @@ December: 21000
 "JYSK": "Shopping"
 "Nike": "Shopping"
 "Bygholm Menswear Aps": "Shopping"
+"Boozt": "Shopping"
+"NAME IT": "Shopping"
+"Vitalisten Aps": "Shopping"
+"Bog & Idé": "Shopping"
 
 # Subscriptions
 "spotify": "Subscriptions"

@@ -229,6 +229,51 @@ def classify_type(frame: pd.DataFrame) -> pd.Series:
     return out
 
 
+def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
+    """Return True for rows that should be included in spend/income calculations.
+
+    Rules:
+    - Manual rows are always considered successful.
+    - If `state` is present, only explicit successful states are included.
+    - If `state` is missing/blank, keep the row (backward-compatible fallback).
+    """
+
+    mask = pd.Series(True, index=frame.index, dtype="bool")
+
+    source = frame.get("source", pd.Series("", index=frame.index, dtype="object"))
+    is_manual = source.astype(str).str.casefold().eq("manual")
+
+    state = frame.get("state", pd.Series("", index=frame.index, dtype="object"))
+    state_norm = state.astype(str).str.upper().str.strip()
+    has_state = state_norm.ne("") & state_norm.ne("NAN")
+
+    success_states = {
+        "COMPLETED",
+        "SETTLED",
+        "EXECUTED",
+    }
+    failure_states = {
+        "REVERTED",
+        "FAILED",
+        "DECLINED",
+        "CANCELLED",
+        "CANCELED",
+        "REJECTED",
+        "REVERSED",
+        "EXPIRED",
+    }
+
+    is_success_state = state_norm.isin(success_states)
+    is_failure_state = state_norm.isin(failure_states)
+
+    # For rows with an explicit state, require success and block known failures.
+    mask.loc[has_state] = is_success_state.loc[has_state] & ~is_failure_state.loc[has_state]
+
+    # Manual rows do not carry provider state and should always be kept.
+    mask.loc[is_manual] = True
+    return mask
+
+
 def normalize_text(value: object) -> str:
     if value is None:
         return ""
@@ -665,11 +710,13 @@ def convert_to_dkk(
         if col not in out.columns:
             return out
 
+    success_mask = successful_transaction_mask(out)
     mask = (
         out["type"].isin(["income", "expense", "refund"])
         & out["amount_net"].notna()
         & out["currency"].notna()
         & out["completed_date"].notna()
+        & success_mask
     )
 
     if not mask.any():
@@ -747,8 +794,10 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
 
     df = categorize_expenses(df)
     df = convert_to_dkk(df)
+    success_mask = successful_transaction_mask(df)
 
     base = df.copy()
+    base = base[success_mask].copy()
     base = base[base["completed_date"].notna()].copy() if "completed_date" in base.columns else base
     base["amount_dkk"] = pd.to_numeric(base.get("amount_dkk"), errors="coerce")
     base = base[base["amount_dkk"].notna()].copy()
@@ -781,6 +830,7 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
         )
 
     other_df = df.copy()
+    other_df = other_df[success_mask].copy()
     if "type" in other_df.columns:
         other_df = other_df[other_df["type"].astype(str).str.casefold().eq("expense")].copy()
     if "category" in other_df.columns:
