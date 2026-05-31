@@ -35,9 +35,15 @@ def fmt_dkk(x: float) -> str:
 
 
 @st.cache_data(show_spinner=True)
-def load_prepared(csv_path: str, fx_version: float, manual_version: float) -> PreparedData:
-    # manual_version exists purely to invalidate the cache when manual_expenses.csv changes
-    _ = manual_version
+def load_prepared(
+    csv_path: str,
+    fx_version: float,
+    manual_version: float,
+    csv_version: float,
+    refresh_nonce: int,
+) -> PreparedData:
+    # Version args exist to invalidate the cache when source files change or user presses refresh.
+    _ = (fx_version, manual_version, csv_version, refresh_nonce)
     return prepare_data_for_plotting(csv_path, manual_data_dir="data")
 
 
@@ -519,6 +525,14 @@ def month_totals(totals_by_month: pd.DataFrame, month: str) -> tuple[float, floa
     return exp_total, inc_total, ref_total
 
 
+def refresh_dashboard_data() -> None:
+    """Clear cached data and rerun so updated CSV rows are picked up."""
+    st.session_state["_refresh_nonce"] = int(st.session_state.get("_refresh_nonce", 0)) + 1
+    st.session_state["_just_refreshed"] = True
+    st.cache_data.clear()
+    st.rerun()
+
+
 def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int, has_cross_month: bool = False) -> None:
     # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1
     cross_month_text = " | <span title='Refunds from previous month(s) applied to this month'>🔄</span>" if has_cross_month else ""
@@ -806,14 +820,31 @@ def main():
 
     st.title("Revolut statement")
 
+    if st.session_state.pop("_just_refreshed", False):
+        st.toast("Dashboard data reloaded from disk")
+
+    numbers_docs_dir = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents"
+
     try:
-        csv_path = find_latest_account_statement_csv("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents")
+        csv_path = find_latest_account_statement_csv(numbers_docs_dir)
     except Exception as e:
         st.error(str(e))
         return
 
     # Keep workspace tidy: delete older account-statement CSVs.
-    cleanup_outdated_account_statement_csvs("/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents", keep_path=csv_path)
+    cleanup_outdated_account_statement_csvs(numbers_docs_dir, keep_path=csv_path, prefix="account-statement")
+
+    savings_csv_path: str | None = None
+    savings_lookup_error: str | None = None
+    try:
+        savings_csv_path = find_latest_savings_statement_csv(numbers_docs_dir)
+        cleanup_outdated_account_statement_csvs(
+            numbers_docs_dir,
+            keep_path=savings_csv_path,
+            prefix="savings-statement",
+        )
+    except Exception as e:
+        savings_lookup_error = str(e)
 
     st.caption(f"CSV: {csv_path}")
 
@@ -823,6 +854,8 @@ def main():
 
     fx_version = fx_cache_version(data_dir="data")
     manual_version = manual_expenses_version(data_dir="data")
+    account_csv_version = file_mtime(csv_path)
+    refresh_nonce = int(st.session_state.get("_refresh_nonce", 0))
 
     # Background refresh: updates cache to today's date without blocking the UI.
     updater = fx_background_updater()
@@ -836,7 +869,16 @@ def main():
     tabs = st.tabs(["Expenses", "Investment"])
 
     with tabs[0]:
-        prepared = load_prepared(csv_path, fx_version, manual_version)
+        if st.button("Refresh Expenses Data", key="refresh_expenses_data"):
+            refresh_dashboard_data()
+
+        prepared = load_prepared(
+            csv_path,
+            fx_version,
+            manual_version,
+            account_csv_version,
+            refresh_nonce,
+        )
 
         # Display max transaction date
         if not prepared.df.empty and "completed_date" in prepared.df.columns:
@@ -987,6 +1029,9 @@ def main():
                     st.rerun()
 
     with tabs[1]:
+        if st.button("Refresh Investment Data", key="refresh_investment_data"):
+            refresh_dashboard_data()
+
         st.subheader("Investment FX P/L (DKK -> USD/GBP)")
         st.caption("Only exchange-out rows are included: sub_type=Exchange, description contains 'Exchanged to', currency=DKK, amount_net<0.")
 
@@ -1000,17 +1045,10 @@ def main():
         st.divider()
         st.markdown("### Savings Interest Net of Fees")
 
-        savings_search_dir = "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents"
-        try:
-            savings_csv_path = find_latest_savings_statement_csv(savings_search_dir)
-            cleanup_outdated_account_statement_csvs(
-                savings_search_dir,
-                keep_path=savings_csv_path,
-                prefix="savings-statement",
-            )
+        if savings_csv_path:
             st.caption(f"Savings CSV: {savings_csv_path}")
-        except Exception as e:
-            st.info(f"No savings statement found: {e}")
+        else:
+            st.info(f"No savings statement found: {savings_lookup_error or 'unknown error'}")
             return
 
         savings_detail, savings_totals = compute_savings_interest_summary(savings_csv_path)

@@ -24,7 +24,6 @@ December: 21000
 "lygten bazar": "Groceries"
 "sct. peders bageri & konditori": "Groceries"
 "bagt": "Groceries"
-"imi 2610 aps": "Groceries"
 "netto": "Groceries"
 "rema": "Groceries"
 "rema 1000": "Groceries"
@@ -47,7 +46,13 @@ December: 21000
 "Mob.pay Nan Lygten": "Groceries"
 "Carlsro Super Let-Køb A/S": "Groceries"
 "Anywhere": "Groceries"
-"Saigon 45": "Groceries"
+"Mob.pay Karoline Bianc": "Groceries"
+"ICA": "Groceries"
+"Benji": "Groceries"
+"Købmanden På Ej": "Groceries"
+"7-Eleven": "Groceries"
+"Fiskehuset Hornbaek Aps M": "Groceries"
+"Galgebakkens Kobmand": "Groceries"
 
 # Pet
 "zooplus": "Pet"
@@ -73,6 +78,10 @@ December: 21000
 "Mob.pay Pige Camp 2025": "Ice Hockey"
 "Copenhagen Falcon": "Ice Hockey"
 "Mob.pay Rsik Kiosk": "Ice Hockey"
+"Helsingborgs H": "Ice Hockey"
+"Copenhagen Fal": "Ice Hockey"
+"Qvickly": "Ice Hockey"
+"Mob.pay Digital Contac": "Ice Hockey"
 
 # Fuel
 "uno-x": "Fuel"
@@ -85,6 +94,8 @@ December: 21000
 "fuel": "Fuel"
 "benzin": "Fuel"
 "diesel": "Fuel"
+"Ingo": "Fuel"
+"Ok": "Fuel"
 
 # Fuel Travel
 "Pludra Tankstelle": "Fuel Travel"
@@ -106,11 +117,11 @@ December: 21000
 "wash": "Car service"
 "synshal": "Car service"
 "EasyPark": "Car service"
+"Thor Autocenter": "Car service"
+"Mob.pay Uno X Mobility": "Car service"
 
 # Maintenance
 "thansen": "Maintenance"
-"tein foto roedovre aps": "Maintenance"
-"rasthaus tb sindelfinger": "Maintenance"
 
 # Transport
 "dsb": "Transport"
@@ -145,6 +156,17 @@ December: 21000
 "novo nordisk": "Eat Out"
 "Subway": "Eat Out"
 "Mob.pay Alireza Kashan": "Eat Out"
+"imi 2610 aps": "Eat Out"
+"Nuova Italia": "Eat Out"
+"Food And Co Novo 9p 131": "Eat Out"
+"Ismageriet": "Eat Out"
+"Falafelo": "Eat Out"
+"Hornbak Is": "Eat Out"
+"Bootleggers": "Eat Out"
+"Saigon 45": "Eat Out"
+"Https://andersenbakery": "Eat Out"
+"Andersen Bakery": "Eat Out"
+"Jordbaermanden": "Eat Out"
 
 # Shopping
 "amazon": "Shopping"
@@ -163,8 +185,9 @@ December: 21000
 "Bygholm Menswear Aps": "Shopping"
 "Boozt": "Shopping"
 "NAME IT": "Shopping"
-"Vitalisten Aps": "Shopping"
 "Bog & Idé": "Shopping"
+"UNIQLO": "Shopping"
+"tein foto roedovre aps": "Shopping"
 
 # Subscriptions
 "spotify": "Subscriptions"
@@ -190,6 +213,7 @@ December: 21000
 "3 ": "Bills"
 "water": "Bills"
 "utility": "Bills"
+"Info Connect A/s": "Bills"
 
 # Health
 "odontologijos klinika": "Health"
@@ -202,6 +226,10 @@ December: 21000
 "hospital": "Health"
 "Comfortclic": "Health"
 "PureGym": "Health"
+"Lgerne Hoffmeyer Linde": "Health"
+"bulk": "Health"
+"Vitalisten Aps": "Health"
+"Blade By J": "Health"
 
 # Insurance
 "insurance": "Insurance"
@@ -211,6 +239,7 @@ December: 21000
 "fee": "Bank fees"
 "commission": "Bank fees"
 "charges": "Bank fees"
+"Wise": "Bank fees"
 
 # Travel
 "brobizz": "Travel"
@@ -230,6 +259,9 @@ December: 21000
 "easyjet": "Travel"
 "sas": "Travel"
 "norwegian": "Travel"
+"Mob.pay Annette Oelert Pe": "Travel"
+"rasthaus tb sindelfinger": "Travel"
+"Rødvig Ferieby": "Travel"
 
 # Entertainment
 "cinema": "Entertainment"
@@ -238,6 +270,9 @@ December: 21000
 "museum": "Entertainment"
 "game": "Entertainment"
 "Fafla Mikrovaerksted": "Entertainment"
+"Vestbadet": "Entertainment"
+"Demokrati Gara": "Entertainment"
+"Mob.pay Sankt Petri Musik": "Entertainment"
 
 # Home
 "furniture": "Home"
@@ -245,45 +280,10 @@ December: 21000
 "jem & fix": "Home"
 "bauhaus": "Home"
 "silvan": "Home"
+"Soestrene Grene 9638": "Home"
 
 # Gifts
 "gift": "Gifts"
 "present": "Gifts"
 "flowers": "Gifts"
 "blomster": "Gifts"
-
-"Mob.pay Karoline Bianc": "Groceries"
-
-"Bootleggers": "Groceries"
-
-"Helsingborgs H": "Ice Hockey"
-
-"Thor Autocenter": "Car service"
-
-"ICA": "Groceries"
-
-"Blade By J": "Maintenance"
-
-"UNIQLO": "Groceries"
-
-"Https://andersenbakery": "Groceries"
-
-"Nuova Italia": "Eat Out"
-
-"Food And Co Novo 9p 131": "Eat Out"
-
-"Ismageriet": "Eat Out"
-
-"Wise": "Groceries"
-
-"Vestbadet": "Entertainment"
-
-"Benji": "Groceries"
-
-"Andersen Bakery": "Groceries"
-
-"Købmanden På Ej": "Groceries"
-
-"Copenhagen Fal": "Ice Hockey"
-
-"7-Eleven": "Groceries"
