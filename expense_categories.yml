@@ -48,7 +48,6 @@ December: 21000
 "Anywhere": "Groceries"
 "Mob.pay Karoline Bianc": "Groceries"
 "ICA": "Groceries"
-"Benji": "Groceries"
 "Købmanden På Ej": "Groceries"
 "7-Eleven": "Groceries"
 "Fiskehuset Hornbaek Aps M": "Groceries"
@@ -167,6 +166,7 @@ December: 21000
 "Https://andersenbakery": "Eat Out"
 "Andersen Bakery": "Eat Out"
 "Jordbaermanden": "Eat Out"
+"Benji": "Eat Out"
 
 # Shopping
 "amazon": "Shopping"
