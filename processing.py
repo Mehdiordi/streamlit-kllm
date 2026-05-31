@@ -1087,7 +1087,7 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
 
     if base.empty or "completed_date" not in base.columns:
         totals = pd.DataFrame(columns=["expense", "income", "refund"])
-        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk"])
+        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count"])
     else:
         base["month"] = base["completed_date"].dt.to_period("M").astype(str)
         expense_after_refunds = _expense_spend_after_refunds(base)
@@ -1121,7 +1121,7 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
         by_month_cat = (
             exp.assign(spend_dkk=lambda x: x["_net_spend"])
             .groupby(["month", "category"])["spend_dkk"]
-            .sum()
+            .agg(spend_dkk="sum", item_count="count")
             .reset_index()
         )
 

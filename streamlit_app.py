@@ -43,7 +43,9 @@ def load_prepared(
     refresh_nonce: int,
 ) -> PreparedData:
     # Version args exist to invalidate the cache when source files change or user presses refresh.
-    _ = (fx_version, manual_version, csv_version, refresh_nonce)
+    # Bump _schema_version whenever PreparedData's shape changes so cached results are rebuilt.
+    _schema_version = 2  # added per-category item_count to spend_by_month_category
+    _ = (fx_version, manual_version, csv_version, refresh_nonce, _schema_version)
     return prepare_data_for_plotting(csv_path, manual_data_dir="data")
 
 
@@ -415,6 +417,13 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     if s.empty:
         return
 
+    # Per-category item (transaction) counts, aligned to the sorted categories.
+    if "item_count" in plot_df.columns:
+        counts = plot_df.set_index("category")["item_count"]
+    else:
+        counts = pd.Series(dtype="int64")
+    y_labels = [f"{cat} ({int(counts.get(cat, 0))})" for cat in s.index.astype(str)]
+
     month_label = pd.Period(month).strftime("%b-%y")
 
     exp_total = float(totals_by_month.loc[month, "expense"]) if month in totals_by_month.index else 0.0
@@ -435,9 +444,21 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     fig.patch.set_facecolor(bg)
     ax.set_facecolor(bg)
 
-    bars = ax.barh(s.index.astype(str), s.values, color=bar)
+    bars = ax.barh(y_labels, s.values, color=bar)
     ax.invert_yaxis()
     ax.set_title(title, loc="left", fontsize=10.5, color=fg, fontweight="bold", pad=6)
+    # Compact category count, aligned with the title on the right.
+    ax.text(
+        1.0,
+        1.0,
+        f"{len(s)} cats",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        color=fg,
+        alpha=0.6,
+        fontsize=8,
+    )
     ax.set_xlabel("DKK", color=fg, fontsize=9)
     ax.set_ylabel("")
 
