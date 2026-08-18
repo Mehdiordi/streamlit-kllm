@@ -11,12 +11,12 @@ March: 21000
 April: 21000
 May: 21000
 June: 21000
-July: 21000
-August: 21000
-September: 21000
-October: 21000
-November: 21000
-December: 21000
+July: 31000
+August: 31000
+September: 31000
+October: 31000
+November: 31000
+December: 34000
 
 # Groceries
 "carlsro bageri aps": "Groceries"
@@ -47,7 +47,7 @@ December: 21000
 "Carlsro Super Let-Køb A/S": "Groceries"
 "Anywhere": "Groceries"
 "Mob.pay Karoline Bianc": "Groceries"
-"ICA": "Groceries"
+"ICA": "Travel"
 "Købmanden På Ej": "Groceries"
 "7-Eleven": "Groceries"
 "Fiskehuset Hornbaek Aps M": "Groceries"
@@ -287,3 +287,67 @@ December: 21000
 "present": "Gifts"
 "flowers": "Gifts"
 "blomster": "Gifts"
+
+"Thiele City 2 119": "Shopping"
+
+"Etsy": "Shopping"
+
+"Yogo": "Shopping"
+
+"Zalando": "Shopping"
+
+"Prestige Barber": "Health"
+
+"Mob.pay Richard Heinrich": "Entertainment"
+
+"Mob.pay Rikke Vestenbjk G": "Entertainment"
+
+"Matas": "Health"
+
+"Lebara": "None"
+
+"Carlsro Super": "Groceries"
+
+"Stockflow Kastrup": "Entertainment"
+
+"Karrusella": "Entertainment"
+
+"Bahne Roedovre": "Shopping"
+
+"Bodylab": "Health"
+
+"Mob.pay Anna Sewell Mo": "Gifts"
+
+"Mob.pay Falcons Camps": "Ice Hockey"
+
+"Rooth Performa": "Ice Hockey"
+
+"Tivoli": "Entertainment"
+
+"Mob.pay Martin Bjorn Soeg": "Ice Hockey"
+
+"Søstrene Grene": "Shopping"
+
+"Atlasbiodk": "Entertainment"
+
+"Hemmakväll": "Travel"
+
+"Atlas Biograferne": "Entertainment"
+
+"Bazar Isen": "Entertainment"
+
+"Rögle BK": "Travel"
+
+"Strandbaren": "Entertainment"
+
+"Spobik Ab": "Ice Hockey"
+
+"Sjoholms Bageri Stan": "Travel"
+
+"Masa Ice Cream": "Entertainment"
+
+"Tycho Brahe Planetarium": "Entertainment"
+
+"Parkster": "Travel"
+
+"Jb Ekonomi E": "Travel"
