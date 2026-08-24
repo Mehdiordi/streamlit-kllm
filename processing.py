@@ -864,11 +864,19 @@ def convert_to_dkk(
     return out
 
 
-def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, bool]:
-    """Return True/False per month indicating if any refunds applied to prior months.
-    
-    Example: {'2026-04': False, '2026-05': True} means May has refunds from April expenses.
-    Useful for dashboard indicators.
+def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, dict[str, object]]:
+    """Return per-month details of refunds that offset expenses in earlier months.
+
+    Months with no cross-month refunds are omitted. Example::
+
+        {
+            "2026-06": {
+                "amount": 328.0,
+                "items": [
+                    {"description": "Boozt", "from_month": "2026-05", "amount": 328.0},
+                ],
+            }
+        }
     """
     if base.empty:
         return {}
@@ -877,22 +885,35 @@ def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, bool]:
     if allocations.empty:
         return {}
 
-    allocations['refund_date'] = pd.to_datetime(allocations['refund_date'])
-    allocations['matched_expense_date'] = pd.to_datetime(allocations['matched_expense_date'])
-    allocations['refund_month'] = allocations['refund_date'].dt.to_period('M').astype(str)
-    allocations['expense_month'] = allocations['matched_expense_date'].dt.to_period('M').astype(str)
-    allocations['is_cross_month'] = allocations['refund_month'] != allocations['expense_month']
+    allocations["refund_date"] = pd.to_datetime(allocations["refund_date"])
+    allocations["matched_expense_date"] = pd.to_datetime(allocations["matched_expense_date"])
+    allocations["refund_month"] = allocations["refund_date"].dt.to_period("M").astype(str)
+    allocations["expense_month"] = allocations["matched_expense_date"].dt.to_period("M").astype(str)
+    cross = allocations[allocations["refund_month"] != allocations["expense_month"]].copy()
+    if cross.empty:
+        return {}
 
-    cross_month_by_refund_month = (
-        allocations[allocations['is_cross_month']]
-        .groupby('refund_month')
-        .size() > 0
+    grouped = (
+        cross.groupby(["refund_month", "expense_month", "refund_description"], dropna=False)
+        .agg(amount=("allocation_amount", "sum"))
+        .reset_index()
+        .sort_values(["refund_month", "amount"], ascending=[True, False])
     )
 
-    summary = {}
-    for month in allocations['refund_month'].unique():
-        summary[month] = bool(cross_month_by_refund_month.get(month, False))
-
+    summary: dict[str, dict[str, object]] = {}
+    for refund_month, g in grouped.groupby("refund_month", sort=False):
+        items = [
+            {
+                "description": str(row.refund_description),
+                "from_month": str(row.expense_month),
+                "amount": float(row.amount),
+            }
+            for row in g.itertuples(index=False)
+        ]
+        summary[str(refund_month)] = {
+            "amount": float(g["amount"].sum()),
+            "items": items,
+        }
     return summary
 
 

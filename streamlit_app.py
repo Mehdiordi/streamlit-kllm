@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import html
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -554,9 +555,79 @@ def refresh_dashboard_data() -> None:
     st.rerun()
 
 
-def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int, has_cross_month: bool = False) -> None:
-    # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1 | ▲ +2
-    cross_month_text = " | <span title='Refunds from previous month(s) applied to this month'>🔄</span>" if has_cross_month else ""
+def _short_merchant(description: str, max_len: int = 14) -> str:
+    """Compact merchant label for the cross-month refund caption."""
+    text = " ".join(str(description or "").split())
+    lower = text.casefold()
+    for prefix in ("refund from ", "refund "):
+        if lower.startswith(prefix):
+            text = text[len(prefix) :].strip()
+            lower = text.casefold()
+            break
+    for suffix in (" payments", " aps", " a/s", " ltd", " llc", " inc", " sarl", " gmbh", " ab"):
+        if lower.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            break
+    parts = text.split()
+    label = parts[0] if parts else ""
+    if len(label) < 3 and len(parts) >= 2:
+        label = " ".join(parts[:2])
+    if len(label) > max_len:
+        return label[: max_len - 1] + "…"
+    return label
+
+
+def _fmt_month_short(month: str) -> str:
+    try:
+        return pd.Period(month, freq="M").strftime("%b")
+    except Exception:
+        return str(month)
+
+
+def _cross_month_caption(cross_month: dict | None) -> str:
+    if not cross_month:
+        return ""
+    amount = float(cross_month.get("amount") or 0.0)
+    raw_items = list(cross_month.get("items") or [])
+    bits: list[str] = []
+    for it in raw_items[:2]:
+        month = _fmt_month_short(str(it.get("from_month") or ""))
+        src = _short_merchant(str(it.get("description") or ""))
+        bit = " ".join(p for p in (month, src) if p)
+        if bit:
+            bits.append(bit)
+    extra = len(raw_items) - 2
+    source_txt = ", ".join(bits)
+    if extra > 0:
+        source_txt = f"{source_txt} +{extra}" if source_txt else f"+{extra}"
+
+    visible = f"🔄 {fmt_dkk(amount)}"
+    if source_txt:
+        visible += f" ← {source_txt}"
+
+    tip_parts: list[str] = []
+    for it in raw_items:
+        from_month = str(it.get("from_month") or "")
+        try:
+            month_label = pd.Period(from_month, freq="M").strftime("%b-%y")
+        except Exception:
+            month_label = from_month or "?"
+        desc = str(it.get("description") or "unknown")
+        tip_parts.append(f"{fmt_dkk(float(it.get('amount') or 0))} DKK from {month_label} {desc}")
+    title = "Refund offsetting an earlier month"
+    if tip_parts:
+        title = f"{title}: " + "; ".join(tip_parts)
+    return f' | <span title="{html.escape(title, quote=True)}">{html.escape(visible)}</span>'
+
+
+def render_month_table_header(
+    exp_total: float,
+    inc_total: float,
+    ref_total: float,
+    items: int,
+    cross_month: dict | None = None,
+) -> None:
+    # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1 | ▲ +2 | 🔄 328 ← May Boozt
     net = inc_total - exp_total
     if net >= 0:
         net_html = f'<span style="color:#21c354;">▲ +{fmt_dkk(net)}</span>'
@@ -568,7 +639,7 @@ def render_month_table_header(exp_total: float, inc_total: float, ref_total: flo
         f"💰 {fmt_dkk(inc_total)} DKK | "
         f"♻️ {fmt_dkk(ref_total)} DKK | "
         f"📊 {items} | "
-        f"{net_html}{cross_month_text}"
+        f"{net_html}{_cross_month_caption(cross_month)}"
         "</small>",
         unsafe_allow_html=True,
     )
@@ -960,13 +1031,12 @@ def main():
                         st.caption("No expense rows for this month.")
                     else:
                         exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
-                        has_cross_month = cross_month_summary.get(m, False)
                         render_month_table_header(
                             exp_total,
                             inc_total,
                             ref_total,
                             items=len(exp_table),
-                            has_cross_month=has_cross_month,
+                            cross_month=cross_month_summary.get(m),
                         )
 
                         # Show 5 rows worth of height; scroll for the rest.
