@@ -38,6 +38,10 @@ MANUAL_EXPENSES_FILENAME = "manual_expenses.csv"
 MANUAL_EXPENSES_BACKUP_FILENAME = "manual_expenses.backup.csv"
 MANUAL_EXTERNAL_SUFFIX = "-External"
 
+BANK_REVOLUT = "revolut"
+BANK_JYSKE = "jyske"
+BANK_MANUAL = "manual"
+
 
 _expense_config_cache: dict[Path, tuple[float, dict[str, str], dict[int, float]]] = {}
 
@@ -294,7 +298,9 @@ def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
     mask = pd.Series(True, index=frame.index, dtype="bool")
 
     source = frame.get("source", pd.Series("", index=frame.index, dtype="object"))
-    is_manual = source.astype(str).str.casefold().eq("manual")
+    source_norm = source.astype(str).str.casefold()
+    is_manual = source_norm.eq("manual")
+    is_jyske = source_norm.eq(BANK_JYSKE)
 
     state = frame.get("state", pd.Series("", index=frame.index, dtype="object"))
     state_norm = state.astype(str).str.upper().str.strip()
@@ -322,8 +328,9 @@ def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
     # For rows with an explicit state, require success and block known failures.
     mask.loc[has_state] = is_success_state.loc[has_state] & ~is_failure_state.loc[has_state]
 
-    # Manual rows do not carry provider state and should always be kept.
+    # Manual and Jyske rows do not carry Revolut provider state and should always be kept.
     mask.loc[is_manual] = True
+    mask.loc[is_jyske] = True
     return mask
 
 
@@ -864,6 +871,19 @@ def convert_to_dkk(
     return out
 
 
+def _bank_series(frame: pd.DataFrame) -> pd.Series:
+    """Bank tag used to keep refunds from one account off another."""
+    if "bank" in frame.columns:
+        bank = frame["bank"].astype(str).str.casefold().str.strip()
+    else:
+        bank = pd.Series("", index=frame.index, dtype="object")
+    if "source" in frame.columns:
+        source = frame["source"].astype(str).str.casefold().str.strip()
+        bank = bank.where(bank.ne("") & bank.ne("nan"), source)
+    bank = bank.replace({"": BANK_REVOLUT, "nan": BANK_REVOLUT, "none": BANK_REVOLUT})
+    return bank.fillna(BANK_REVOLUT)
+
+
 def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, dict[str, object]]:
     """Return per-month details of refunds that offset expenses in earlier months.
 
@@ -939,6 +959,7 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
     exp["_remaining_spend"] = exp_amount.loc[exp.index].astype(float)
     exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
     exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
+    exp["_bank"] = _bank_series(exp)
 
     ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
     if ref.empty:
@@ -947,6 +968,7 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
     ref["_refund_amt"] = pd.to_numeric(ref.get("amount_dkk"), errors="coerce").abs()
     ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
     ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
+    ref["_bank"] = _bank_series(ref)
     ref = ref.loc[
         ref["_refund_amt"].notna()
         & ref["_completed"].notna()
@@ -966,6 +988,7 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
 
         eligible = exp[
             exp["_desc_norm"].eq(refund["_desc_norm"])
+            & exp["_bank"].eq(refund["_bank"])
             & exp["_completed"].notna()
             & exp["_completed"].le(refund["_completed"])
             & exp["_remaining_spend"].gt(0)
@@ -1028,6 +1051,7 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
     exp["_remaining_spend"] = exp_amount.loc[exp.index].astype(float)
     exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
     exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
+    exp["_bank"] = _bank_series(exp)
 
     ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
     if ref.empty:
@@ -1036,6 +1060,7 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
     ref["_refund_amt"] = pd.to_numeric(ref.get("amount_dkk"), errors="coerce").abs()
     ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
     ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
+    ref["_bank"] = _bank_series(ref)
     ref = ref.loc[
         ref["_refund_amt"].notna()
         & ref["_completed"].notna()
@@ -1054,6 +1079,7 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
 
         eligible = exp[
             exp["_desc_norm"].eq(refund["_desc_norm"])
+            & exp["_bank"].eq(refund["_bank"])
             & exp["_completed"].notna()
             & exp["_completed"].le(refund["_completed"])
             & exp["_remaining_spend"].gt(0)
@@ -1085,16 +1111,28 @@ class PreparedData:
     other_expenses: pd.DataFrame
 
 
-def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data") -> PreparedData:
+def prepare_data_for_plotting(
+    csv_path: str,
+    manual_data_dir: str | Path = "data",
+    jyske_csv_path: str | None = None,
+) -> PreparedData:
     """End-to-end prep used by Streamlit plotting."""
+    from jyske_processing import load_jyske_statement
 
     raw = load_revolut_csv(csv_path)
     df = normalize_revolut_df(raw)
     df["type"] = classify_type(df)
+    df["source"] = BANK_REVOLUT
+    df["bank"] = BANK_REVOLUT
 
     manual = load_manual_expenses(manual_data_dir)
     if not manual.empty:
+        manual["bank"] = BANK_MANUAL
         df = pd.concat([df, manual], ignore_index=True, sort=False)
+
+    jyske = load_jyske_statement(jyske_csv_path)
+    if not jyske.empty:
+        df = pd.concat([df, jyske], ignore_index=True, sort=False)
 
     df = categorize_expenses(df)
     df = convert_to_dkk(df)
@@ -1105,10 +1143,12 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
     base = base[base["completed_date"].notna()].copy() if "completed_date" in base.columns else base
     base["amount_dkk"] = pd.to_numeric(base.get("amount_dkk"), errors="coerce")
     base = base[base["amount_dkk"].notna()].copy()
+    if not base.empty:
+        base["bank"] = _bank_series(base)
 
     if base.empty or "completed_date" not in base.columns:
         totals = pd.DataFrame(columns=["expense", "income", "refund"])
-        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count"])
+        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank"])
     else:
         base["month"] = base["completed_date"].dt.to_period("M").astype(str)
         expense_after_refunds = _expense_spend_after_refunds(base)
@@ -1139,12 +1179,16 @@ def prepare_data_for_plotting(csv_path: str, manual_data_dir: str | Path = "data
         if not exp.empty:
             exp = exp.loc[exp.index.intersection(expense_after_refunds.index)].copy()
             exp["_net_spend"] = expense_after_refunds.reindex(exp.index).fillna(0.0)
-        by_month_cat = (
-            exp.assign(spend_dkk=lambda x: x["_net_spend"])
-            .groupby(["month", "category"])["spend_dkk"]
-            .agg(spend_dkk="sum", item_count="count")
-            .reset_index()
-        )
+            exp["bank"] = _bank_series(exp)
+        if exp.empty or "_net_spend" not in exp.columns:
+            by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank"])
+        else:
+            by_month_cat = (
+                exp.assign(spend_dkk=lambda x: x["_net_spend"])
+                .groupby(["month", "category", "bank"])["spend_dkk"]
+                .agg(spend_dkk="sum", item_count="count")
+                .reset_index()
+            )
 
     other_df = df.copy()
     other_df = other_df[success_mask].copy()

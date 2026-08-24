@@ -13,6 +13,8 @@ from fx_cache import FxCacheBackgroundUpdater, ensure_fx_cache_files, fx_cache_v
 from fx_cache import FX_CACHE_TO_CCY, load_fx_cache_series
 import invest_processing as inv
 from processing import (
+    BANK_JYSKE,
+    BANK_REVOLUT,
     PreparedData,
     add_category_mapping,
     append_manual_expense,
@@ -28,6 +30,11 @@ from processing import (
     refund_cross_month_summary,
     successful_transaction_mask,
 )
+from jyske_processing import (
+    find_latest_jyske_statement_csv,
+    jyske_template_path,
+    saved_jyske_csv_path,
+)
 
 
 def fmt_dkk(x: float) -> str:
@@ -42,12 +49,18 @@ def load_prepared(
     manual_version: float,
     csv_version: float,
     refresh_nonce: int,
+    jyske_csv_path: str,
+    jyske_version: float,
 ) -> PreparedData:
     # Version args exist to invalidate the cache when source files change or user presses refresh.
     # Bump _schema_version whenever PreparedData's shape changes so cached results are rebuilt.
-    _schema_version = 2  # added per-category item_count to spend_by_month_category
-    _ = (fx_version, manual_version, csv_version, refresh_nonce, _schema_version)
-    return prepare_data_for_plotting(csv_path, manual_data_dir="data")
+    _schema_version = 3  # added bank to spend_by_month_category
+    _ = (fx_version, manual_version, csv_version, refresh_nonce, jyske_csv_path, jyske_version, _schema_version)
+    return prepare_data_for_plotting(
+        csv_path,
+        manual_data_dir="data",
+        jyske_csv_path=jyske_csv_path or None,
+    )
 
 
 def manual_expenses_version(data_dir: str = "data") -> float:
@@ -414,6 +427,12 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
     if plot_df.empty:
         return
 
+    if "bank" in plot_df.columns:
+        agg = {"spend_dkk": "sum"}
+        if "item_count" in plot_df.columns:
+            agg["item_count"] = "sum"
+        plot_df = plot_df.groupby("category", as_index=False).agg(agg)
+
     s = plot_df.set_index("category")["spend_dkk"].sort_values(ascending=False)
     if s.empty:
         return
@@ -538,6 +557,297 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
 
     plt.tight_layout()
     st.pyplot(fig, clear_figure=True)
+
+
+def _display_category_name(category: object) -> str:
+    if category is None or (isinstance(category, float) and pd.isna(category)):
+        return "Uncategorized"
+    text = str(category).strip()
+    if text in {"", "None", "nan", "NaN"}:
+        return "Uncategorized"
+    return text
+
+
+def _period_coverage_label(months: list[str]) -> str:
+    periods = sorted(pd.Period(m, freq="M") for m in months)
+    if not periods:
+        return ""
+    first, last = periods[0], periods[-1]
+    if first == last:
+        return first.strftime("%b %Y")
+    if first.year == last.year:
+        return f"{first.strftime('%b')}–{last.strftime('%b %Y')}"
+    return f"{first.strftime('%b %Y')} – {last.strftime('%b %Y')}"
+
+
+def annual_spend_by_category(
+    spend_by_month_category: pd.DataFrame,
+    year: str | None,
+    bank: str | None = None,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Sum net spend by category for a calendar year, or all years if year is None."""
+    df = spend_by_month_category.copy()
+    if df.empty:
+        return pd.DataFrame(columns=["category", "spend_dkk", "item_count"]), []
+
+    if bank and "bank" in df.columns:
+        df = df[df["bank"].astype(str).str.casefold().eq(bank)].copy()
+
+    df["month"] = df["month"].astype(str)
+    if year:
+        df = df[df["month"].str.startswith(f"{year}-")].copy()
+    months = sorted(df["month"].unique().tolist())
+    if df.empty:
+        return pd.DataFrame(columns=["category", "spend_dkk", "item_count"]), months
+
+    out = (
+        df.groupby("category", dropna=False)
+        .agg(spend_dkk=("spend_dkk", "sum"), item_count=("item_count", "sum"))
+        .reset_index()
+    )
+    out["category"] = out["category"].map(_display_category_name)
+    out = (
+        out.groupby("category", as_index=False)
+        .agg(spend_dkk=("spend_dkk", "sum"), item_count=("item_count", "sum"))
+    )
+    out = out[pd.to_numeric(out["spend_dkk"], errors="coerce").fillna(0.0) > 0]
+    out = out.sort_values("spend_dkk", ascending=False).reset_index(drop=True)
+    return out, months
+
+
+def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
+    """Full-width ranked bar chart of annual spend by category."""
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.ticker import FuncFormatter
+
+    if annual.empty:
+        return
+
+    s = annual.set_index("category")["spend_dkk"].astype(float)
+    counts = annual.set_index("category")["item_count"]
+    n = len(s)
+    total = float(s.sum())
+    max_val = float(s.max()) if n else 0.0
+
+    bg = "#0e1117"
+    fg = "#e5e7eb"
+    muted = "#94a3b8"
+    track = "#1f2937"
+    grid = "#374151"
+
+    cmap = LinearSegmentedColormap.from_list(
+        "annual_spend",
+        ["#9a3412", "#c2410c", "#ea580c", "#fdba74"],
+    )
+    rank_t = np.linspace(1.0, 0.22, n) if n > 1 else np.array([1.0])
+    colors = [cmap(t) for t in rank_t]
+
+    fig_h = max(4.0, 0.36 * n + 0.85)
+    fig, ax = plt.subplots(figsize=(12.2, fig_h), dpi=130)
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(bg)
+
+    y = np.arange(n)
+    bar_h = 0.74
+    ax.barh(y, np.full(n, max_val if max_val > 0 else 1.0), color=track, height=bar_h, zorder=0)
+    bars = ax.barh(y, s.values, color=colors, height=bar_h, zorder=1)
+
+    ax.invert_yaxis()
+    ax.set_yticks(y)
+    y_labels = [f"{cat}  ({int(counts.loc[cat])})" for cat in s.index]
+    ax.set_yticklabels(y_labels, color=fg, fontsize=9.5)
+    ax.tick_params(axis="y", length=0, pad=6)
+    ax.tick_params(axis="x", colors=muted, labelsize=8, length=0)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.set_xlabel("DKK", color=muted, fontsize=8.5)
+    ax.set_xlim(0, max(1.0, max_val * 1.22))
+    ax.grid(True, axis="x", color=grid, alpha=0.35, linewidth=0.8, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title(
+        f"Spending by category · {period_label}",
+        loc="left",
+        color=fg,
+        fontsize=12.5,
+        fontweight="bold",
+        pad=6,
+    )
+    ax.text(
+        1.0,
+        1.0,
+        f"{n} categories · net of refunds",
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        color=muted,
+        fontsize=8,
+    )
+
+    pad_inside = max_val * 0.018
+    pad_outside = max_val * 0.012
+    for bar in bars:
+        w = float(bar.get_width())
+        y_mid = float(bar.get_y() + bar.get_height() / 2)
+        pct = (100.0 * w / total) if total > 0 else 0.0
+        amount = fmt_dkk(w)
+        pct_txt = f"{pct:.0f}%" if pct >= 0.5 else "<1%"
+        label = f"{amount}   {pct_txt}"
+        inside = max_val > 0 and w >= max_val * 0.28
+        ax.text(
+            (w - pad_inside) if inside else (w + pad_outside),
+            y_mid,
+            label,
+            va="center",
+            ha="right" if inside else "left",
+            color="#fff7ed" if inside else fg,
+            fontsize=8.5,
+            fontweight="bold",
+            zorder=2,
+        )
+
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True, use_container_width=True)
+
+
+def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None) -> None:
+    if st.button("Refresh Annual Data", key="refresh_annual_data"):
+        refresh_dashboard_data()
+
+    spend = prepared.spend_by_month_category
+    bank_choice = st.radio(
+        "Banks",
+        options=["Revolut", "Jyske", "All banks"],
+        horizontal=True,
+        index=0,
+        key="annual_bank",
+        help="Revolut is the current statement. Jyske uses a separate CSV (placeholder until uploaded).",
+    )
+    bank_key = {"Revolut": BANK_REVOLUT, "Jyske": BANK_JYSKE, "All banks": None}[bank_choice]
+
+    bank_spend = spend
+    if bank_key and not spend.empty and "bank" in spend.columns:
+        bank_spend = spend[spend["bank"].astype(str).str.casefold().eq(bank_key)].copy()
+
+    if bank_choice == "Jyske" and bank_spend.empty:
+        _render_jyske_placeholder(jyske_csv_path)
+        return
+
+    if bank_spend.empty:
+        st.warning("No expense rows with a valid DKK amount to plot.")
+        return
+
+    years = sorted({str(m)[:4] for m in bank_spend["month"].astype(str).unique()}, reverse=True)
+    period_options = years + (["All years"] if len(years) > 1 else [])
+    selected = st.radio(
+        "Period",
+        options=period_options,
+        horizontal=True,
+        index=0,
+        key="annual_period",
+        help="Calendar-year totals. “All years” sums every month in the statement.",
+    )
+    year = None if selected == "All years" else selected
+    annual, months = annual_spend_by_category(bank_spend, year, bank=bank_key)
+    if annual.empty:
+        st.info("No categorized spend for this period.")
+        return
+
+    period_label = _period_coverage_label(months)
+    n_months = max(len(months), 1)
+    total = float(annual["spend_dkk"].sum())
+    top = annual.iloc[0]
+    top_share = (100.0 * float(top["spend_dkk"]) / total) if total > 0 else 0.0
+    bank_note = bank_choice if bank_choice != "All banks" else "all banks"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total spend", f"{fmt_dkk(total)} DKK")
+    c2.metric("Categories", f"{len(annual)}")
+    c3.metric("Months covered", f"{n_months}")
+    c4.metric("Largest category", f"{top['category']} · {top_share:.0f}%")
+    st.caption(
+        f"Net of refunds · {period_label} · {bank_note}"
+        if period_label
+        else f"Net of refunds · {bank_note}"
+    )
+
+    plot_annual_categories(annual, period_label or selected)
+
+    table = annual.copy()
+    table["share"] = table["spend_dkk"] / total if total else 0.0
+    table["monthly_avg"] = table["spend_dkk"] / n_months
+    view = pd.DataFrame(
+        {
+            "category": table["category"],
+            "spend_dkk": table["spend_dkk"].map(lambda x: fmt_dkk(float(x))),
+            "share": table["share"].map(lambda x: f"{100.0 * float(x):.1f}%"),
+            "transactions": table["item_count"].map(lambda x: f"{int(x):,}"),
+            "monthly_avg_dkk": table["monthly_avg"].map(lambda x: fmt_dkk(float(x))),
+        }
+    )
+    st.dataframe(view, use_container_width=True, hide_index=True, height=min(520, 42 * len(view) + 38))
+
+
+def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
+    template = jyske_template_path()
+    dest = saved_jyske_csv_path("data")
+    st.info(
+        "No Jyske statement loaded yet. The export format is different from Revolut, "
+        "so parsing is a placeholder until the real CSV is here."
+    )
+    if jyske_csv_path:
+        st.caption(f"Found `{jyske_csv_path}` but it produced no rows. The Jyske parser likely needs adjusting.")
+    else:
+        st.caption(
+            f"Drop a file with `jyske` in the name into your Numbers Documents folder or `{dest}`. "
+            f"Column template: `{template}`."
+        )
+    uploaded = st.file_uploader("Upload Jyske CSV", type=["csv"], key="jyske_csv_upload")
+    if uploaded is None:
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(uploaded.getvalue())
+    st.success(f"Saved to {dest}. Reloading…")
+    refresh_dashboard_data()
+
+
+def render_expense_month_grid(prepared: PreparedData) -> None:
+    months = sorted(prepared.spend_by_month_category["month"].unique().tolist(), reverse=True)
+    cross_month_summary = refund_cross_month_summary(prepared.df)
+
+    row_size = 3
+    for row_start in range(0, len(months), row_size):
+        row_months = months[row_start : row_start + row_size]
+        cols = st.columns(row_size)
+
+        for col_idx, m in enumerate(row_months):
+            with cols[col_idx]:
+                plot_month(prepared.spend_by_month_category, prepared.totals_by_month, m)
+
+                exp_table = expenses_table_for_month(prepared.df, m)
+                if exp_table.empty:
+                    st.caption("No expense rows for this month.")
+                else:
+                    exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
+                    render_month_table_header(
+                        exp_total,
+                        inc_total,
+                        ref_total,
+                        items=len(exp_table),
+                        cross_month=cross_month_summary.get(m),
+                    )
+                    st.dataframe(
+                        exp_table,
+                        use_container_width=True,
+                        height=290,
+                        hide_index=True,
+                    )
+
+        if row_start + row_size < len(months):
+            st.markdown("<div style='margin: 0.4rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
+            st.divider()
+            st.markdown("<div style='margin: 0.2rem 0 0.6rem 0;'></div>", unsafe_allow_html=True)
 
 
 def month_totals(totals_by_month: pd.DataFrame, month: str) -> tuple[float, float, float]:
@@ -946,6 +1256,9 @@ def main():
 
     st.caption(f"CSV: {csv_path}")
 
+    jyske_csv_path = find_latest_jyske_statement_csv([numbers_docs_dir, "data"])
+    jyske_version = file_mtime(jyske_csv_path) if jyske_csv_path else 0.0
+
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
     with st.spinner("Preparing FX cache (first run may take a bit)…"):
         ensure_fx_cache_files(data_dir="data")
@@ -964,7 +1277,7 @@ def main():
         st.session_state["_fx_cache_rerun_done"] = True
         st.rerun()
 
-    tabs = st.tabs(["Expenses", "Investment"])
+    tabs = st.tabs(["Expenses", "Investment", "Annual"])
 
     with tabs[0]:
         if st.button("Refresh Expenses Data", key="refresh_expenses_data"):
@@ -976,6 +1289,8 @@ def main():
             manual_version,
             account_csv_version,
             refresh_nonce,
+            jyske_csv_path or "",
+            jyske_version,
         )
 
         # Display max transaction date
@@ -1011,47 +1326,8 @@ def main():
 
         if prepared.spend_by_month_category.empty:
             st.warning("No expense rows with a valid DKK amount to plot.")
-            return
-
-        months = sorted(prepared.spend_by_month_category["month"].unique().tolist(), reverse=True)
-        cross_month_summary = refund_cross_month_summary(prepared.df)
-
-        # Three-column layout with row separators (newest month first)
-        row_size = 3
-        for row_start in range(0, len(months), row_size):
-            row_months = months[row_start : row_start + row_size]
-            cols = st.columns(row_size)
-
-            for col_idx, m in enumerate(row_months):
-                with cols[col_idx]:
-                    plot_month(prepared.spend_by_month_category, prepared.totals_by_month, m)
-
-                    exp_table = expenses_table_for_month(prepared.df, m)
-                    if exp_table.empty:
-                        st.caption("No expense rows for this month.")
-                    else:
-                        exp_total, inc_total, ref_total = month_totals(prepared.totals_by_month, m)
-                        render_month_table_header(
-                            exp_total,
-                            inc_total,
-                            ref_total,
-                            items=len(exp_table),
-                            cross_month=cross_month_summary.get(m),
-                        )
-
-                        # Show 5 rows worth of height; scroll for the rest.
-                        st.dataframe(
-                            exp_table,
-                            use_container_width=True,
-                            height=290,
-                            hide_index=True,
-                        )
-
-            # Distinct separation between this row of tables and the next row of charts.
-            if row_start + row_size < len(months):
-                st.markdown("<div style='margin: 0.4rem 0 0.2rem 0;'></div>", unsafe_allow_html=True)
-                st.divider()
-                st.markdown("<div style='margin: 0.2rem 0 0.6rem 0;'></div>", unsafe_allow_html=True)
+        else:
+            render_expense_month_grid(prepared)
 
         st.subheader("Expenses categorized as Other")
         render_other_expenses_editor(prepared.other_expenses.copy())
@@ -1124,6 +1400,18 @@ def main():
                     )
                     st.session_state["_manual_expense_last_status"] = "success"
                     st.rerun()
+
+    with tabs[2]:
+        prepared_annual = load_prepared(
+            csv_path,
+            fx_version,
+            manual_version,
+            account_csv_version,
+            refresh_nonce,
+            jyske_csv_path or "",
+            jyske_version,
+        )
+        render_annual_tab(prepared_annual, jyske_csv_path)
 
     with tabs[1]:
         if st.button("Refresh Investment Data", key="refresh_investment_data"):
