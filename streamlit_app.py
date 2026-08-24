@@ -555,14 +555,20 @@ def refresh_dashboard_data() -> None:
 
 
 def render_month_table_header(exp_total: float, inc_total: float, ref_total: float, items: int, has_cross_month: bool = False) -> None:
-    # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1
+    # Compact caption-style header (small text) like: 💸 5 DKK |  💰 0 DKK |  ♻️ 0 DKK | 📊 1 | ▲ +2
     cross_month_text = " | <span title='Refunds from previous month(s) applied to this month'>🔄</span>" if has_cross_month else ""
+    net = inc_total - exp_total
+    if net >= 0:
+        net_html = f'<span style="color:#21c354;">▲ +{fmt_dkk(net)}</span>'
+    else:
+        net_html = f'<span style="color:#ff4b4b;">▼ {fmt_dkk(net)}</span>'
     st.markdown(
         "<small>"
         f"💸 <b>{fmt_dkk(exp_total)}</b> DKK | "
         f"💰 {fmt_dkk(inc_total)} DKK | "
         f"♻️ {fmt_dkk(ref_total)} DKK | "
-        f"📊 {items}{cross_month_text}"
+        f"📊 {items} | "
+        f"{net_html}{cross_month_text}"
         "</small>",
         unsafe_allow_html=True,
     )
