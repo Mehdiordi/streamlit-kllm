@@ -234,6 +234,17 @@ December: 34000
 # Insurance
 "insurance": "Insurance"
 "forsikring": "Insurance"
+"tryg forsikring": "Insurance"
+"letsikring": "Insurance"
+
+# Unions
+"akademikernes": "Unions"
+"ida div.kontingent": "Unions"
+"ida div": "Unions"
+
+# Loan
+"jyske realkredit": "Loan"
+"realkredit": "Loan"
 
 # Bank fees
 "fee": "Bank fees"
@@ -281,6 +292,8 @@ December: 34000
 "bauhaus": "Home"
 "silvan": "Home"
 "Soestrene Grene 9638": "Home"
+"parkeringslauget": "Home"
+"parkkanten": "Home"
 
 # Gifts
 "gift": "Gifts"
@@ -355,6 +368,9 @@ December: 34000
 "Sportscentret": "Ice Hockey"
 
 "Applus R?dovre": "Car service"
+"skattestyrelsen motor": "Car service"
+"pure gym": "Health"
+"omkostninger, netbank": "Bank fees"
 
 "Grannys House": "Groceries"
 

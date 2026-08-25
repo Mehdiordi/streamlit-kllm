@@ -31,6 +31,7 @@ from processing import (
     successful_transaction_mask,
 )
 from jyske_processing import (
+    cleanup_outdated_jyske_statement_csvs,
     find_latest_jyske_statement_csv,
     jyske_template_path,
     saved_jyske_csv_path,
@@ -711,6 +712,21 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     st.pyplot(fig, clear_figure=True, use_container_width=True)
 
 
+def _period_refund_total(df: pd.DataFrame, year: str | None, bank: str | None) -> tuple[float, int]:
+    if df.empty or "type" not in df.columns:
+        return 0.0, 0
+    r = df[df["type"].astype(str).str.casefold().eq("refund")].copy()
+    if r.empty:
+        return 0.0, 0
+    if bank and "bank" in r.columns:
+        r = r[r["bank"].astype(str).str.casefold().eq(bank)].copy()
+    r["completed_date"] = pd.to_datetime(r.get("completed_date"), errors="coerce")
+    if year:
+        r = r[r["completed_date"].dt.year == int(year)].copy()
+    amt = pd.to_numeric(r.get("amount_dkk"), errors="coerce").abs()
+    return float(amt.sum()), int(amt.notna().sum())
+
+
 def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None) -> None:
     if st.button("Refresh Annual Data", key="refresh_annual_data"):
         refresh_dashboard_data()
@@ -722,7 +738,7 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
         horizontal=True,
         index=0,
         key="annual_bank",
-        help="Revolut is the current statement. Jyske uses a separate CSV (placeholder until uploaded).",
+        help="Jyske includes only the allow-listed bills and Boozt refunds. Revolut top-ups and salary are excluded.",
     )
     bank_key = {"Revolut": BANK_REVOLUT, "Jyske": BANK_JYSKE, "All banks": None}[bank_choice]
 
@@ -760,17 +776,17 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
     top = annual.iloc[0]
     top_share = (100.0 * float(top["spend_dkk"]) / total) if total > 0 else 0.0
     bank_note = bank_choice if bank_choice != "All banks" else "all banks"
+    ref_total, ref_n = _period_refund_total(prepared.df, year, bank_key)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total spend", f"{fmt_dkk(total)} DKK")
-    c2.metric("Categories", f"{len(annual)}")
-    c3.metric("Months covered", f"{n_months}")
+    c2.metric("Refunds", f"{fmt_dkk(ref_total)} DKK")
+    c3.metric("Categories", f"{len(annual)}")
     c4.metric("Largest category", f"{top['category']} · {top_share:.0f}%")
-    st.caption(
-        f"Net of refunds · {period_label} · {bank_note}"
-        if period_label
-        else f"Net of refunds · {bank_note}"
-    )
+    cap = f"{period_label} · {bank_note} · {n_months} months" if period_label else bank_note
+    if ref_n:
+        cap = f"{cap} · {ref_n} refunds"
+    st.caption(cap)
 
     plot_annual_categories(annual, period_label or selected)
 
@@ -800,7 +816,8 @@ def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
         st.caption(f"Found `{jyske_csv_path}` but it produced no rows. The Jyske parser likely needs adjusting.")
     else:
         st.caption(
-            f"Drop a file with `jyske` in the name into your Numbers Documents folder or `{dest}`. "
+            f"Drop a new Mit Jyske CSV into your Numbers Documents folder "
+            f"(typical name: `Your Name_YYYY-MM-DD-YYYY-MM-DD.csv`) or `{dest}`. "
             f"Column template: `{template}`."
         )
     uploaded = st.file_uploader("Upload Jyske CSV", type=["csv"], key="jyske_csv_upload")
@@ -1254,9 +1271,13 @@ def main():
     except Exception as e:
         savings_lookup_error = str(e)
 
-    st.caption(f"CSV: {csv_path}")
+    st.caption(f"Revolut CSV: {csv_path}")
 
-    jyske_csv_path = find_latest_jyske_statement_csv([numbers_docs_dir, "data"])
+    jyske_search_dirs = [numbers_docs_dir, "data"]
+    jyske_csv_path = find_latest_jyske_statement_csv(jyske_search_dirs)
+    if jyske_csv_path:
+        cleanup_outdated_jyske_statement_csvs(jyske_search_dirs, keep_path=jyske_csv_path)
+        st.caption(f"Jyske CSV: {jyske_csv_path}")
     jyske_version = file_mtime(jyske_csv_path) if jyske_csv_path else 0.0
 
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.

@@ -80,13 +80,18 @@ def _to_float_maybe(value: object) -> float | None:
 
 
 def _find_latest_statement_csv(search_dir: str, name_contains: str) -> str:
-    """Pick the most recent statement CSV whose filename contains the given token."""
+    """Pick the most recent statement CSV whose filename contains the given token.
+
+    Matching is case-insensitive. Recency is the last YYYY-MM-DD in the filename,
+    then file modified time.
+    """
 
     base = Path(search_dir)
     if not base.exists() or not base.is_dir():
         raise FileNotFoundError(f"Folder not found: {base}")
 
-    candidates = [p for p in base.glob("*.csv") if name_contains in p.name]
+    token = name_contains.casefold()
+    candidates = [p for p in base.glob("*.csv") if token in p.name.casefold()]
     if not candidates:
         raise FileNotFoundError(f"No CSV files containing '{name_contains}' in {base}")
 
@@ -99,7 +104,6 @@ def _find_latest_statement_csv(search_dir: str, name_contains: str) -> str:
         end_date = parsed[-1] if parsed else None
         start_date = parsed[0] if parsed else None
         mtime = p.stat().st_mtime
-        # None-safe sorting: use very old date when missing
         end_dt = end_date or pd.Timestamp("1900-01-01").date()
         start_dt = start_date or pd.Timestamp("1900-01-01").date()
         return (end_dt, start_dt, mtime)
@@ -149,11 +153,12 @@ def cleanup_outdated_account_statement_csvs(
             keep_resolved = None
 
     deleted: list[str] = []
+    prefix_cf = prefix.casefold()
     for p in base.glob("*.csv"):
         # Hard safety guard for manual data persistence.
         if p.name == MANUAL_EXPENSES_FILENAME:
             continue
-        if not p.name.startswith(prefix):
+        if not p.name.casefold().startswith(prefix_cf):
             continue
         if keep_resolved is not None:
             try:

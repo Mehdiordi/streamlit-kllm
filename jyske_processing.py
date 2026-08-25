@@ -1,14 +1,14 @@
 """Jyske Bank statement loader.
 
-Jyske exports a different layout than Revolut. This module maps a Jyske CSV onto
-the internal schema used by the dashboard (completed_date, description,
-amount_net, currency, type, bank).
+Real export (Numbers / Mit Jyske):
+- semicolon-separated
+- date as DD.MM.YYYY
+- amount as -4,021.00 (comma thousands, period decimals)
+- columns: Date, Text, Amount, Balance, ..., MainCategory, Category
 
-When a real export is uploaded, adjust:
-- COLUMN_ALIASES (header names)
-- _detect_separator / _parse_dk_amount (delimiter and number format)
-- classify_jyske_type (expense vs income vs refund)
-- date parsing (dayfirst)
+Only a small allow-list is kept for dashboard calculations. Revolut top-ups,
+savings moves, unlabeled transfers, and salary are dropped so they are not
+double-counted with Revolut.
 """
 
 from __future__ import annotations
@@ -20,45 +20,73 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from processing import to_snake
+from processing import normalize_text, to_snake
 
 BANK_JYSKE = "jyske"
-JYSKE_FILENAME_TOKEN = "jyske"
 JYSKE_SAVED_FILENAME = "jyske-statement.csv"
 TEMPLATE_PATH = Path(__file__).with_name("templates") / "jyske_statement.csv"
 
-# Placeholder aliases for a typical Danish netbank CSV (semicolon, comma decimals).
-# Extend this map when the real Jyske headers are known.
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "completed_date": (
+        "date",
         "dato",
         "bogforingsdato",
         "bogføringsdato",
-        "valørdato",
-        "valoerdato",
-        "date",
     ),
     "description": (
-        "tekst",
-        "tekstforklaring",
-        "beskrivelse",
-        "description",
         "text",
+        "tekst",
+        "description",
+        "beskrivelse",
     ),
     "amount": (
+        "amount",
         "beloeb",
         "beløb",
-        "amount",
         "sum",
     ),
-    "balance": ("saldo", "balance"),
-    "currency": ("valuta", "currency", "mont", "mønt"),
+    "currency": ("valuta", "currency"),
 }
+
+# Exact description (normalized) -> dashboard category.
+JYSKE_EXPENSE_CATEGORY: dict[str, str] = {
+    "akademikernes": "Unions",
+    "bs jyske realkredit": "Loan",
+    "bs parkeringslauget parkkanten": "Home",
+    "bs pure gym denmark a/s": "Health",
+    "bs skattestyrelsen motor opkraevning": "Car service",
+    "bs skattestyrelsen motor opkrævning": "Car service",
+    "ida div.kontingent": "Unions",
+    "letsikring af barn ved do": "Insurance",
+    "letsikring af barn ved dø": "Insurance",
+    "omkostninger, netbank og mobilbank": "Bank fees",
+    "to tryg forsikring": "Insurance",
+}
+
+JYSKE_REFUND_PREFIXES: tuple[str, ...] = (
+    "mobilepay boozt.com",
+    "mobilepay boozt",
+)
 
 DEFAULT_SEARCH_DIRS = (
     "/Users/mehdiordikhani/Library/Mobile Documents/com~apple~Numbers/Documents",
     "data",
 )
+
+_SKIP_NAME_PARTS = (
+    "account-statement",
+    "savings-statement",
+    "consolidated_statement",
+    "manual_expenses",
+    "template",
+)
+
+# Mit Jyske / Numbers export: "Mehdi Ordikhani_2026-01-01-2026-08-24.csv"
+_JYSKE_NAME_DATE_RANGE = re.compile(
+    r"_\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}\.csv$",
+    re.IGNORECASE,
+)
+_CSV_DATES = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def jyske_template_path() -> Path:
@@ -69,49 +97,110 @@ def saved_jyske_csv_path(data_dir: str | Path = "data") -> Path:
     return Path(data_dir) / JYSKE_SAVED_FILENAME
 
 
+def _header_looks_like_jyske(path: Path) -> bool:
+    try:
+        header = path.read_text(encoding="utf-8-sig", errors="replace").splitlines()[0]
+    except Exception:
+        return False
+    sep = ";" if header.count(";") >= header.count(",") else ","
+    cols = {to_snake(c.strip()) for c in header.strip().split(sep)}
+    return {"date", "text", "amount"}.issubset(cols) and "accountname" in cols
+
+
+def _is_jyske_export(path: Path) -> bool:
+    """True for Jyske checking-account exports, never Revolut/savings/manual files."""
+    name = path.name.casefold()
+    if any(part in name for part in _SKIP_NAME_PARTS):
+        return False
+    if "jyske" in name:
+        return True
+    if _JYSKE_NAME_DATE_RANGE.search(path.name):
+        return _header_looks_like_jyske(path)
+    return _header_looks_like_jyske(path)
+
+
+def _jyske_sort_key(p: Path):
+    dates = [pd.to_datetime(d, errors="coerce") for d in _CSV_DATES.findall(p.name)]
+    dates = [d for d in dates if pd.notna(d)]
+    end = dates[-1] if dates else pd.Timestamp("1900-01-01")
+    start = dates[0] if dates else pd.Timestamp("1900-01-01")
+    return (end, start, p.stat().st_mtime)
+
+
+def _iter_jyske_candidates(search_dirs: Iterable[str | Path]) -> list[Path]:
+    candidates: list[Path] = []
+    for folder in search_dirs:
+        base = Path(folder)
+        if not base.exists() or not base.is_dir():
+            continue
+        for p in base.glob("*.csv"):
+            if _is_jyske_export(p):
+                candidates.append(p)
+    return candidates
+
+
 def find_latest_jyske_statement_csv(
     search_dirs: Iterable[str | Path] | None = None,
 ) -> str | None:
     """Return the newest Jyske CSV path, or None if none has been uploaded yet.
 
-    Looks for filenames containing 'jyske' (case-insensitive), ignoring templates.
+    Recency uses the last YYYY-MM-DD in the filename, then modified time.
     """
 
-    dirs = [Path(d) for d in (search_dirs if search_dirs is not None else DEFAULT_SEARCH_DIRS)]
-    candidates: list[Path] = []
-    token = JYSKE_FILENAME_TOKEN.casefold()
-    for folder in dirs:
-        if not folder.exists() or not folder.is_dir():
-            continue
-        for p in folder.glob("*.csv"):
-            name = p.name.casefold()
-            if token not in name:
-                continue
-            if "template" in name:
-                continue
-            candidates.append(p)
-
+    dirs = list(search_dirs if search_dirs is not None else DEFAULT_SEARCH_DIRS)
+    candidates = _iter_jyske_candidates(dirs)
     if not candidates:
         return None
-
-    date_re = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-    def sort_key(p: Path):
-        dates = [pd.to_datetime(d, errors="coerce") for d in date_re.findall(p.name)]
-        dates = [d for d in dates if pd.notna(d)]
-        end = dates[-1] if dates else pd.Timestamp("1900-01-01")
-        return (end, p.stat().st_mtime)
-
-    best = sorted(candidates, key=sort_key, reverse=True)[0]
+    best = sorted(candidates, key=_jyske_sort_key, reverse=True)[0]
     return str(best.as_posix())
+
+
+def cleanup_outdated_jyske_statement_csvs(
+    search_dirs: Iterable[str | Path] | None = None,
+    keep_path: str | None = None,
+) -> list[str]:
+    """Delete older Jyske exports, keeping only `keep_path`.
+
+    Matches the Revolut cleanup behavior: latest file stays, previous exports go.
+    Never deletes Revolut, savings, consolidated, or manual_expenses files.
+    """
+
+    if not keep_path:
+        return []
+
+    dirs = list(search_dirs if search_dirs is not None else DEFAULT_SEARCH_DIRS)
+    keep_resolved = None
+    if keep_path:
+        try:
+            keep_resolved = Path(keep_path).resolve()
+        except Exception:
+            keep_resolved = None
+
+    deleted: list[str] = []
+    for p in _iter_jyske_candidates(dirs):
+        if keep_resolved is not None:
+            try:
+                if p.resolve() == keep_resolved:
+                    continue
+            except Exception:
+                if str(p.as_posix()) == str(keep_path):
+                    continue
+        elif keep_path and str(p.as_posix()) == str(keep_path):
+            continue
+        try:
+            p.unlink()
+            deleted.append(str(p.as_posix()))
+        except Exception:
+            continue
+    return deleted
 
 
 def _detect_separator(header: str) -> str:
     return ";" if header.count(";") >= header.count(",") else ","
 
 
-def _parse_dk_amount(value: object) -> float:
-    """Parse Danish-style amounts like '-1.234,56' or '1234,56-'. Adjust if needed."""
+def parse_jyske_amount(value: object) -> float:
+    """Parse Jyske amounts: '-4,021.00' (this export) or Danish '-4.021,00'."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return float("nan")
     if isinstance(value, (int, float, np.integer, np.floating)) and not isinstance(value, bool):
@@ -121,12 +210,16 @@ def _parse_dk_amount(value: object) -> float:
     if not s or s in {"-", "–", "−"}:
         return float("nan")
 
-    negative = s.startswith("-") or s.startswith("−") or s.endswith("-")
+    negative = s.startswith(("-", "−")) or s.endswith("-")
     s = s.strip("-").strip("−")
     if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
+        if s.rfind(".") > s.rfind(","):
+            s = s.replace(",", "")
+        else:
+            s = s.replace(".", "").replace(",", ".")
     elif "," in s:
-        s = s.replace(",", ".")
+        left, _, right = s.partition(",")
+        s = f"{left}.{right}" if len(right) == 2 else s.replace(",", "")
     try:
         n = float(s)
     except ValueError:
@@ -143,21 +236,47 @@ def _resolve_column(df: pd.DataFrame, aliases: tuple[str, ...]) -> str | None:
     return None
 
 
-def classify_jyske_type(frame: pd.DataFrame) -> pd.Series:
-    """Placeholder type rules. Revisit when the real Jyske export is in hand.
+def _norm_key(text: object) -> str:
+    t = normalize_text(text)
+    t = t.replace("ø", "o").replace("æ", "ae").replace("å", "a")
+    return t
 
-    Current assumption: negative amount_net = expense, positive = income.
-    Descriptions containing refund/tilbagefør are marked refund.
-    """
 
-    amt = pd.to_numeric(frame.get("amount_net"), errors="coerce")
-    out = pd.Series(pd.NA, index=frame.index, dtype="object")
-    out.loc[amt < 0] = "expense"
-    out.loc[amt > 0] = "income"
-    desc = frame.get("description", pd.Series("", index=frame.index)).astype(str)
-    is_refund = desc.str.contains(r"refund|tilbagefør|tilbagefor", case=False, na=False)
-    out.loc[is_refund] = "refund"
-    return out
+def _expense_category_for(description: str) -> str | None:
+    key = _norm_key(description)
+    if key in JYSKE_EXPENSE_CATEGORY:
+        return JYSKE_EXPENSE_CATEGORY[key]
+    for needle, category in JYSKE_EXPENSE_CATEGORY.items():
+        if key == _norm_key(needle) or key.startswith(_norm_key(needle)):
+            return category
+    return None
+
+
+def _is_jyske_refund(description: str) -> bool:
+    key = _norm_key(description)
+    return any(key.startswith(prefix) for prefix in JYSKE_REFUND_PREFIXES)
+
+
+def classify_included_jyske(frame: pd.DataFrame) -> pd.DataFrame:
+    """Keep only allow-listed rows and assign type + category."""
+    if frame.empty:
+        return frame
+
+    out = frame.copy()
+    desc = out["description"].astype(str)
+    cats = desc.map(_expense_category_for)
+    is_refund = desc.map(_is_jyske_refund)
+    keep = cats.notna() | is_refund
+    out = out.loc[keep].copy()
+    if out.empty:
+        return out
+
+    desc = out["description"].astype(str)
+    cats = desc.map(_expense_category_for)
+    is_refund = desc.map(_is_jyske_refund)
+    out["type"] = np.where(is_refund, "refund", "expense")
+    out["category"] = np.where(is_refund, pd.NA, cats)
+    return out.reset_index(drop=True)
 
 
 def load_jyske_statement(csv_path: str | Path | None) -> pd.DataFrame:
@@ -189,7 +308,7 @@ def load_jyske_statement(csv_path: str | Path | None) -> pd.DataFrame:
     out = pd.DataFrame()
     out["completed_date"] = pd.to_datetime(raw[date_col], dayfirst=True, errors="coerce")
     out["description"] = raw[desc_col].astype(str).str.strip()
-    out["amount_net"] = raw[amt_col].map(_parse_dk_amount)
+    out["amount_net"] = raw[amt_col].map(parse_jyske_amount)
 
     ccy_col = _resolve_column(raw, COLUMN_ALIASES["currency"])
     if ccy_col:
@@ -201,7 +320,6 @@ def load_jyske_statement(csv_path: str | Path | None) -> pd.DataFrame:
     out["sub_type"] = "Jyske"
     out["source"] = BANK_JYSKE
     out["bank"] = BANK_JYSKE
-    out["type"] = classify_jyske_type(out)
-
     out = out[out["completed_date"].notna() & out["amount_net"].notna() & out["description"].ne("")].copy()
+    out = classify_included_jyske(out)
     return out.reset_index(drop=True)
