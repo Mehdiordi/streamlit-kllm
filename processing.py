@@ -297,6 +297,7 @@ def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
     Rules:
     - Manual rows are always considered successful.
     - If `state` is present, only explicit successful states are included.
+    - PENDING is included (authorized but not settled yet; later uploads replace it).
     - If `state` is missing/blank, keep the row (backward-compatible fallback).
     """
 
@@ -315,6 +316,7 @@ def successful_transaction_mask(frame: pd.DataFrame) -> pd.Series:
         "COMPLETED",
         "SETTLED",
         "EXECUTED",
+        "PENDING",
     }
     failure_states = {
         "REVERTED",

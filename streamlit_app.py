@@ -31,8 +31,7 @@ from processing import (
     successful_transaction_mask,
 )
 from jyske_processing import (
-    cleanup_outdated_jyske_statement_csvs,
-    find_latest_jyske_statement_csv,
+    ensure_jyske_reference_merged,
     jyske_template_path,
     saved_jyske_csv_path,
 )
@@ -616,9 +615,55 @@ def annual_spend_by_category(
     return out, months
 
 
+def _annual_bar_style() -> dict[str, object]:
+    from matplotlib.colors import LinearSegmentedColormap
+
+    return {
+        "bg": "#0e1117",
+        "fg": "#f8fafc",
+        "muted": "#cbd5e1",
+        "track": "#1f2937",
+        "grid": "#374151",
+        "label": "#ffffff",
+        "cmap": LinearSegmentedColormap.from_list(
+            "annual_spend",
+            ["#9a3412", "#c2410c", "#ea580c", "#fdba74"],
+        ),
+        "bar_h": 0.26,
+    }
+
+
+def _bar_label_effects():
+    import matplotlib.patheffects as pe
+
+    return [pe.withStroke(linewidth=2.2, foreground="#07080c")]
+
+
+def _annotate_bar_value(ax, x: float, y: float, text: str, *, fontsize: float = 7.5) -> None:
+    """High-contrast value to the right of the bar (never on the fill)."""
+    style = _annual_bar_style()
+    ax.text(
+        x,
+        y,
+        text,
+        va="center",
+        ha="left",
+        color=style["label"],
+        fontsize=fontsize,
+        fontweight="bold",
+        zorder=3,
+        clip_on=False,
+        path_effects=_bar_label_effects(),
+    )
+
+
+def _annual_rank_colors(cmap, n: int) -> list:
+    rank_t = np.linspace(1.0, 0.22, n) if n > 1 else np.array([1.0])
+    return [cmap(t) for t in rank_t]
+
+
 def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     """Full-width ranked bar chart of annual spend by category."""
-    from matplotlib.colors import LinearSegmentedColormap
     from matplotlib.ticker import FuncFormatter
 
     if annual.empty:
@@ -629,40 +674,29 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     n = len(s)
     total = float(s.sum())
     max_val = float(s.max()) if n else 0.0
+    style = _annual_bar_style()
+    colors = _annual_rank_colors(style["cmap"], n)
+    bar_h = float(style["bar_h"])
 
-    bg = "#0e1117"
-    fg = "#e5e7eb"
-    muted = "#94a3b8"
-    track = "#1f2937"
-    grid = "#374151"
-
-    cmap = LinearSegmentedColormap.from_list(
-        "annual_spend",
-        ["#9a3412", "#c2410c", "#ea580c", "#fdba74"],
-    )
-    rank_t = np.linspace(1.0, 0.22, n) if n > 1 else np.array([1.0])
-    colors = [cmap(t) for t in rank_t]
-
-    fig_h = max(4.0, 0.36 * n + 0.85)
+    fig_h = min(3.2, max(1.7, 0.13 * n + 0.55))
     fig, ax = plt.subplots(figsize=(12.2, fig_h), dpi=130)
-    fig.patch.set_facecolor(bg)
-    ax.set_facecolor(bg)
+    fig.patch.set_facecolor(style["bg"])
+    ax.set_facecolor(style["bg"])
 
     y = np.arange(n)
-    bar_h = 0.74
-    ax.barh(y, np.full(n, max_val if max_val > 0 else 1.0), color=track, height=bar_h, zorder=0)
+    ax.barh(y, np.full(n, max_val if max_val > 0 else 1.0), color=style["track"], height=bar_h, zorder=0)
     bars = ax.barh(y, s.values, color=colors, height=bar_h, zorder=1)
 
     ax.invert_yaxis()
     ax.set_yticks(y)
     y_labels = [f"{cat}  ({int(counts.loc[cat])})" for cat in s.index]
-    ax.set_yticklabels(y_labels, color=fg, fontsize=9.5)
-    ax.tick_params(axis="y", length=0, pad=6)
-    ax.tick_params(axis="x", colors=muted, labelsize=8, length=0)
+    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=8)
+    ax.tick_params(axis="y", length=0, pad=4)
+    ax.tick_params(axis="x", colors=style["muted"], labelsize=7, length=0)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    ax.set_xlabel("DKK", color=muted, fontsize=8.5)
-    ax.set_xlim(0, max(1.0, max_val * 1.22))
-    ax.grid(True, axis="x", color=grid, alpha=0.35, linewidth=0.8, zorder=0)
+    ax.set_xlabel("DKK", color=style["muted"], fontsize=7.5)
+    ax.set_xlim(0, max(1.0, max_val * 1.42))
+    ax.grid(True, axis="x", color=style["grid"], alpha=0.35, linewidth=0.6, zorder=0)
     ax.set_axisbelow(True)
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -670,10 +704,10 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     ax.set_title(
         f"Spending by category · {period_label}",
         loc="left",
-        color=fg,
-        fontsize=12.5,
+        color=style["fg"],
+        fontsize=11,
         fontweight="bold",
-        pad=6,
+        pad=4,
     )
     ax.text(
         1.0,
@@ -682,34 +716,150 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
         transform=ax.transAxes,
         ha="right",
         va="bottom",
-        color=muted,
-        fontsize=8,
+        color=style["muted"],
+        fontsize=7,
     )
 
-    pad_inside = max_val * 0.018
-    pad_outside = max_val * 0.012
+    pad_outside = max(max_val * 0.018, 1.0)
     for bar in bars:
         w = float(bar.get_width())
         y_mid = float(bar.get_y() + bar.get_height() / 2)
         pct = (100.0 * w / total) if total > 0 else 0.0
-        amount = fmt_dkk(w)
         pct_txt = f"{pct:.0f}%" if pct >= 0.5 else "<1%"
-        label = f"{amount}   {pct_txt}"
-        inside = max_val > 0 and w >= max_val * 0.28
-        ax.text(
-            (w - pad_inside) if inside else (w + pad_outside),
-            y_mid,
-            label,
-            va="center",
-            ha="right" if inside else "left",
-            color="#fff7ed" if inside else fg,
-            fontsize=8.5,
-            fontweight="bold",
-            zorder=2,
-        )
+        _annotate_bar_value(ax, w + pad_outside, y_mid, f"{fmt_dkk(w)}  {pct_txt}", fontsize=6.0)
 
     fig.tight_layout()
-    st.pyplot(fig, clear_figure=True, use_container_width=True)
+    st.pyplot(fig, clear_figure=True, width="stretch")
+
+
+def annual_spend_by_year_category(
+    spend_by_month_category: pd.DataFrame,
+    bank: str | None = None,
+) -> pd.DataFrame:
+    """Net spend by category for every calendar year in the statement."""
+    df = spend_by_month_category.copy()
+    if df.empty:
+        return pd.DataFrame(columns=["year", "category", "spend_dkk", "item_count"])
+
+    if bank and "bank" in df.columns:
+        df = df[df["bank"].astype(str).str.casefold().eq(bank)].copy()
+
+    df["month"] = df["month"].astype(str)
+    df["year"] = df["month"].str[:4]
+    df["category"] = df["category"].map(_display_category_name)
+    out = (
+        df.groupby(["year", "category"], dropna=False)
+        .agg(spend_dkk=("spend_dkk", "sum"), item_count=("item_count", "sum"))
+        .reset_index()
+    )
+    out = out[pd.to_numeric(out["spend_dkk"], errors="coerce").fillna(0.0) > 0]
+    return out
+
+
+def plot_annual_year_split(by_year: pd.DataFrame) -> None:
+    """One slim bar chart per year, same categories and scale so bars line up."""
+    from matplotlib.ticker import FuncFormatter
+
+    if by_year.empty:
+        return
+
+    years = sorted(by_year["year"].astype(str).unique(), reverse=True)
+    if len(years) < 2:
+        return
+
+    cat_totals = by_year.groupby("category")["spend_dkk"].sum().sort_values(ascending=False)
+    categories = [c for c in cat_totals.index.tolist() if str(c).strip()]
+    if not categories:
+        return
+
+    spend = (
+        by_year.pivot_table(index="category", columns="year", values="spend_dkk", aggfunc="sum")
+        .reindex(categories)
+        .reindex(columns=years)
+        .fillna(0.0)
+    )
+    counts = (
+        by_year.pivot_table(index="category", columns="year", values="item_count", aggfunc="sum")
+        .reindex(categories)
+        .reindex(columns=years)
+        .fillna(0.0)
+    )
+    n_cat = len(categories)
+    n_year = len(years)
+    max_val = float(spend.to_numpy().max()) if n_cat else 0.0
+    style = _annual_bar_style()
+    colors = _annual_rank_colors(style["cmap"], n_cat)
+    bar_h = float(style["bar_h"])
+
+    fig_h = min(3.1, max(1.55, 0.105 * n_cat + 0.52))
+    fig_w = 12.2
+    fig, axes = plt.subplots(
+        1,
+        n_year,
+        sharey=True,
+        sharex=True,
+        figsize=(fig_w, fig_h),
+        dpi=130,
+        layout="constrained",
+    )
+    if n_year == 1:
+        axes = [axes]
+    fig.patch.set_facecolor(style["bg"])
+
+    y = np.arange(n_cat)
+    xlim = max(1.0, max_val * 1.48)
+    year_bar_h = min(bar_h, 0.22)
+
+    for i, (ax, year) in enumerate(zip(axes, years)):
+        ax.set_facecolor(style["bg"])
+        vals = spend[year].to_numpy(dtype=float)
+        year_total = float(vals.sum())
+        ax.barh(y, np.full(n_cat, max_val if max_val > 0 else 1.0), color=style["track"], height=year_bar_h, zorder=0)
+        bars = ax.barh(y, vals, color=colors, height=year_bar_h, zorder=1)
+        if i == 0:
+            ax.invert_yaxis()
+        ax.set_yticks(y)
+        if i == 0:
+            ax.set_yticklabels(categories, color=style["fg"], fontsize=7.5)
+            ax.tick_params(axis="y", length=0, pad=4)
+        else:
+            ax.tick_params(axis="y", length=0, labelleft=False)
+        ax.tick_params(axis="x", colors=style["muted"], labelsize=6.5, length=0)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+        ax.set_xlim(0, xlim)
+        ax.grid(True, axis="x", color=style["grid"], alpha=0.3, linewidth=0.5, zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        ax.set_title(
+            f"{year}  ·  {fmt_dkk(year_total)}",
+            loc="left",
+            color=style["fg"],
+            fontsize=10,
+            fontweight="bold",
+            pad=3,
+        )
+
+        pad_outside = max(max_val * 0.022, 1.0)
+        for bar, count in zip(bars, counts[year].to_numpy()):
+            w = float(bar.get_width())
+            if w <= 0:
+                continue
+            y_mid = float(bar.get_y() + bar.get_height() / 2)
+            n_items = int(count)
+            label = f"{fmt_dkk(w)}" + (f"  ({n_items})" if n_items else "")
+            _annotate_bar_value(ax, w + pad_outside, y_mid, label, fontsize=5.4)
+
+    fig.suptitle(
+        "Spend by year · same categories and scale",
+        color=style["fg"],
+        fontsize=11,
+        fontweight="bold",
+        x=0.0,
+        ha="left",
+    )
+    st.pyplot(fig, clear_figure=True, width="stretch")
 
 
 def _period_refund_total(df: pd.DataFrame, year: str | None, bank: str | None) -> tuple[float, int]:
@@ -790,6 +940,10 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
 
     plot_annual_categories(annual, period_label or selected)
 
+    year_split = annual_spend_by_year_category(bank_spend, bank=bank_key)
+    if year_split["year"].nunique() > 1:
+        plot_annual_year_split(year_split)
+
     table = annual.copy()
     table["share"] = table["spend_dkk"] / total if total else 0.0
     table["monthly_avg"] = table["spend_dkk"] / n_months
@@ -825,7 +979,14 @@ def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(uploaded.getvalue())
-    st.success(f"Saved to {dest}. Reloading…")
+    merged = ensure_jyske_reference_merged()
+    if merged and merged.added_rows:
+        st.success(
+            f"Merged +{merged.added_rows} Jyske rows into `{merged.path}` "
+            f"({merged.min_date} → {merged.max_date}). Reloading…"
+        )
+    else:
+        st.success(f"Saved to {dest}. Reloading…")
     refresh_dashboard_data()
 
 
@@ -1274,10 +1435,16 @@ def main():
     st.caption(f"Revolut CSV: {csv_path}")
 
     jyske_search_dirs = [numbers_docs_dir, "data"]
-    jyske_csv_path = find_latest_jyske_statement_csv(jyske_search_dirs)
-    if jyske_csv_path:
-        cleanup_outdated_jyske_statement_csvs(jyske_search_dirs, keep_path=jyske_csv_path)
-        st.caption(f"Jyske CSV: {jyske_csv_path}")
+    jyske_merge = ensure_jyske_reference_merged(jyske_search_dirs)
+    jyske_csv_path = jyske_merge.path if jyske_merge else None
+    if jyske_merge:
+        span = ""
+        if jyske_merge.min_date and jyske_merge.max_date:
+            span = f" ({jyske_merge.min_date} → {jyske_merge.max_date})"
+        extra = f" · merged +{jyske_merge.added_rows}" if jyske_merge.added_rows else ""
+        st.caption(f"Jyske reference: {jyske_merge.path}{span}{extra}")
+        if jyske_merge.gap_warning:
+            st.warning(jyske_merge.gap_warning)
     jyske_version = file_mtime(jyske_csv_path) if jyske_csv_path else 0.0
 
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
