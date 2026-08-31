@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import html
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -45,6 +46,58 @@ from jyske_processing import (
 
 def fmt_dkk(x: float) -> str:
     return f"{x:,.0f}"
+
+
+def _show_fig(fig, *, width: str = "stretch") -> None:
+    st.pyplot(fig, clear_figure=True, width=width)
+    plt.close(fig)
+
+
+def _file_source_lines(
+    csv_path: str | None,
+    jyske_merge,
+    karoline_merge,
+    savings_csv_path: str | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    if csv_path:
+        lines.append(f"Revolut CSV: {csv_path}")
+    if jyske_merge:
+        span = ""
+        if jyske_merge.min_date and jyske_merge.max_date:
+            span = f" ({jyske_merge.min_date} → {jyske_merge.max_date})"
+        extra = f" · merged +{jyske_merge.added_rows}" if jyske_merge.added_rows else ""
+        removed = f" · removed {len(jyske_merge.removed_files)} upload(s)" if jyske_merge.removed_files else ""
+        lines.append(f"Jyske reference (Mehdi): {jyske_merge.path}{span}{extra}{removed}")
+    if karoline_merge:
+        span = ""
+        if karoline_merge.min_date and karoline_merge.max_date:
+            span = f" ({karoline_merge.min_date} → {karoline_merge.max_date})"
+        extra = f" · merged +{karoline_merge.added_rows}" if karoline_merge.added_rows else ""
+        removed = f" · removed {len(karoline_merge.removed_files)} upload(s)" if karoline_merge.removed_files else ""
+        lines.append(f"Jyske reference (Karoline): {karoline_merge.path}{span}{extra}{removed}")
+    if savings_csv_path:
+        lines.append(f"Savings CSV: {savings_csv_path}")
+    return lines
+
+
+def _render_file_sources(lines: list[str]) -> None:
+    if not lines:
+        return
+    body = "<br>".join(html.escape(x) for x in lines)
+    st.markdown(
+        f"<div style='margin-top:1.75rem;font-size:0.62rem;line-height:1.45;"
+        f"color:#64748b;word-break:break-all'>{body}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+@contextmanager
+def _file_sources_footer(lines: list[str]):
+    try:
+        yield
+    finally:
+        _render_file_sources(lines)
 
 
 
@@ -575,7 +628,7 @@ def plot_month(spend_by_month_category: pd.DataFrame, totals_by_month: pd.DataFr
                 )
 
     plt.tight_layout()
-    st.pyplot(fig, clear_figure=True)
+    _show_fig(fig)
 
 
 def _display_category_name(category: object) -> str:
@@ -716,10 +769,10 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
     max_val = float(s.max()) if n else 0.0
     style = _annual_bar_style(people)
     colors = _annual_rank_colors(style["cmap"], n)
-    bar_h = float(style["bar_h"])
+    bar_h = min(float(style["bar_h"]), 0.22)
 
-    fig_h = min(3.2, max(1.7, 0.13 * n + 0.55))
-    fig, ax = plt.subplots(figsize=(12.2, fig_h), dpi=130)
+    fig_h = min(2.6, max(0.92, 0.10 * n + 0.50))
+    fig, ax = plt.subplots(figsize=(12.2, fig_h), dpi=130, layout="constrained")
     fig.patch.set_facecolor(style["bg"])
     ax.set_facecolor(style["bg"])
 
@@ -731,11 +784,11 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
     ax.invert_yaxis()
     ax.set_yticks(y)
     y_labels = [f"{cat}  ({int(counts.loc[cat])})" for cat in s.index]
-    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=6.5)
-    ax.tick_params(axis="y", length=0, pad=4)
-    ax.tick_params(axis="x", colors=style["muted"], labelsize=7, length=0)
+    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=6.0)
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.tick_params(axis="x", colors=style["muted"], labelsize=6.5, length=0)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    ax.set_xlabel("DKK", color=style["muted"], fontsize=7.5)
+    ax.set_xlabel("DKK", color=style["muted"], fontsize=7)
     ax.set_xlim(0, max(1.0, max_val * 1.42))
     ax.grid(True, axis="x", color=style["grid"], alpha=0.35, linewidth=0.6, zorder=0)
     ax.set_axisbelow(True)
@@ -746,9 +799,9 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
         f"Spending by category · {period_label}",
         loc="left",
         color=style["fg"],
-        fontsize=11,
+        fontsize=10,
         fontweight="bold",
-        pad=4,
+        pad=3,
     )
     ax.text(
         1.0,
@@ -758,7 +811,7 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
         ha="right",
         va="bottom",
         color=style["muted"],
-        fontsize=7,
+        fontsize=6.5,
     )
 
     pad_outside = max(max_val * 0.018, 1.0)
@@ -767,10 +820,9 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
         y_mid = float(bar.get_y() + bar.get_height() / 2)
         pct = (100.0 * w / total) if total > 0 else 0.0
         pct_txt = f"{pct:.0f}%" if pct >= 0.5 else "<1%"
-        _annotate_bar_value(ax, w + pad_outside, y_mid, f"{fmt_dkk(w)}  {pct_txt}", fontsize=6.0)
+        _annotate_bar_value(ax, w + pad_outside, y_mid, f"{fmt_dkk(w)}  {pct_txt}", fontsize=5.4)
 
-    fig.tight_layout()
-    st.pyplot(fig, clear_figure=True, width="stretch")
+    _show_fig(fig)
 
 
 def annual_spend_by_year_category(
@@ -904,7 +956,7 @@ def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> 
         x=0.0,
         ha="left",
     )
-    st.pyplot(fig, clear_figure=True, width="stretch")
+    _show_fig(fig)
 
 
 def _period_refund_total(
@@ -1079,7 +1131,7 @@ def render_annual_tab(
             "monthly_avg_dkk": table["monthly_avg"].map(lambda x: fmt_dkk(float(x))),
         }
     )
-    st.dataframe(view, use_container_width=True, hide_index=True, height=min(520, 42 * len(view) + 38))
+    st.dataframe(view, width="stretch", hide_index=True, height=min(520, 42 * len(view) + 38))
 
     if people_choice in {"Mehdi", "Karoline"} and bank_choice == "Jyske":
         _render_personal_breakdown(prepared.df, year=year, person=person_key, people_label=people_choice)
@@ -1165,7 +1217,7 @@ def _render_personal_breakdown(
                 "n": groups["n"].map(lambda x: f"{int(x):,}"),
             }
         )
-        st.dataframe(gview, use_container_width=True, hide_index=True, height=min(280, 36 * len(gview) + 38))
+        st.dataframe(gview, width="stretch", hide_index=True, height=min(280, 36 * len(gview) + 38))
     with tcol:
         tview = pd.DataFrame(
             {
@@ -1174,7 +1226,7 @@ def _render_personal_breakdown(
                 "n": texts["n"].map(lambda x: f"{int(x):,}"),
             }
         )
-        st.dataframe(tview, use_container_width=True, hide_index=True, height=min(280, 36 * len(tview) + 38))
+        st.dataframe(tview, width="stretch", hide_index=True, height=min(280, 36 * len(tview) + 38))
 
 
 def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
@@ -1236,7 +1288,7 @@ def render_expense_month_grid(prepared: PreparedData) -> None:
                     )
                     st.dataframe(
                         exp_table,
-                        use_container_width=True,
+                        width="stretch",
                         height=290,
                         hide_index=True,
                     )
@@ -1429,7 +1481,7 @@ def render_other_expenses_editor(other_df: pd.DataFrame) -> None:
     st.caption("Assign a category and click Apply Category Changes to save into expense_categories.yml")
     edited = st.data_editor(
         view,
-        use_container_width=True,
+        width="stretch",
         height=260,
         hide_index=True,
         key="other_expenses_editor",
@@ -1455,7 +1507,7 @@ def render_other_expenses_editor(other_df: pd.DataFrame) -> None:
         preview_df = pd.DataFrame(
             [{"description": description, "category": category} for description, category in changes.items()]
         ).sort_values(["category", "description"], ascending=[True, True])
-        st.dataframe(preview_df, use_container_width=True, hide_index=True, height=180)
+        st.dataframe(preview_df, width="stretch", hide_index=True, height=180)
     else:
         st.info("No pending category changes selected yet.")
 
@@ -1617,7 +1669,7 @@ def plot_current_month_budget_progress(df: pd.DataFrame) -> None:
     ax.set_ylim(0, max(1.0, max_y * 1.08))
 
     plt.tight_layout()
-    st.pyplot(fig, clear_figure=True)
+    _show_fig(fig)
 
 
 def main():
@@ -1651,18 +1703,10 @@ def main():
     except Exception as e:
         savings_lookup_error = str(e)
 
-    st.caption(f"Revolut CSV: {csv_path}")
-
     jyske_search_dirs = [numbers_docs_dir, "data"]
     jyske_merge = ensure_jyske_reference_merged(jyske_search_dirs)
     jyske_csv_path = jyske_merge.path if jyske_merge else None
     if jyske_merge:
-        span = ""
-        if jyske_merge.min_date and jyske_merge.max_date:
-            span = f" ({jyske_merge.min_date} → {jyske_merge.max_date})"
-        extra = f" · merged +{jyske_merge.added_rows}" if jyske_merge.added_rows else ""
-        removed = f" · removed {len(jyske_merge.removed_files)} upload(s)" if jyske_merge.removed_files else ""
-        st.caption(f"Jyske reference (Mehdi): {jyske_merge.path}{span}{extra}{removed}")
         if jyske_merge.gap_warning:
             st.warning(jyske_merge.gap_warning)
     jyske_version = file_mtime(jyske_csv_path) if jyske_csv_path else 0.0
@@ -1670,15 +1714,10 @@ def main():
     karoline_merge = ensure_karoline_jyske_reference_merged()
     karoline_jyske_csv_path = karoline_merge.path if karoline_merge else None
     if karoline_merge:
-        span = ""
-        if karoline_merge.min_date and karoline_merge.max_date:
-            span = f" ({karoline_merge.min_date} → {karoline_merge.max_date})"
-        extra = f" · merged +{karoline_merge.added_rows}" if karoline_merge.added_rows else ""
-        removed = f" · removed {len(karoline_merge.removed_files)} upload(s)" if karoline_merge.removed_files else ""
-        st.caption(f"Jyske reference (Karoline): {karoline_merge.path}{span}{extra}{removed}")
         if karoline_merge.gap_warning:
             st.warning(karoline_merge.gap_warning)
     karoline_jyske_version = file_mtime(karoline_jyske_csv_path) if karoline_jyske_csv_path else 0.0
+    file_lines = _file_source_lines(csv_path, jyske_merge, karoline_merge, savings_csv_path)
 
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
     with st.spinner("Preparing FX cache (first run may take a bit)…"):
@@ -1700,7 +1739,7 @@ def main():
 
     tabs = st.tabs(["Expenses", "Investment", "Annual"])
 
-    with tabs[0]:
+    with tabs[0], _file_sources_footer(file_lines):
         if st.button("Refresh Expenses Data", key="refresh_expenses_data"):
             refresh_dashboard_data()
 
@@ -1825,7 +1864,7 @@ def main():
                     st.session_state["_manual_expense_last_status"] = "success"
                     st.rerun()
 
-    with tabs[2]:
+    with tabs[2], _file_sources_footer(file_lines):
         prepared_annual = load_prepared(
             csv_path,
             fx_version,
@@ -1839,7 +1878,7 @@ def main():
         )
         render_annual_tab(prepared_annual, jyske_csv_path, karoline_jyske_csv_path)
 
-    with tabs[1]:
+    with tabs[1], _file_sources_footer(file_lines):
         if st.button("Refresh Investment Data", key="refresh_investment_data"):
             refresh_dashboard_data()
 
@@ -1856,9 +1895,7 @@ def main():
         st.divider()
         st.markdown("### Savings Interest Net of Fees")
 
-        if savings_csv_path:
-            st.caption(f"Savings CSV: {savings_csv_path}")
-        else:
+        if not savings_csv_path:
             st.info(f"No savings statement found: {savings_lookup_error or 'unknown error'}")
             return
 
@@ -2044,11 +2081,10 @@ def main():
         ax_sav.xaxis.grid(True, color="#1e293b", linewidth=0.45, alpha=0.8, zorder=0)
         ax_sav.set_axisbelow(True)
 
-        plt.tight_layout(pad=0.35)
+        fig_sav.subplots_adjust(left=0.28, right=0.96, top=0.86, bottom=0.12)
         col_chart, _ = st.columns([1.45, 1.55])
         with col_chart:
-            st.pyplot(fig_sav)
-        plt.close(fig_sav)
+            _show_fig(fig_sav)
 
         total_dkk_out = float(pd.to_numeric(totals.get("dkk_out"), errors="coerce").sum())
         total_dkk_value_today = float(pd.to_numeric(totals.get("dkk_value_today"), errors="coerce").sum())
@@ -2067,7 +2103,7 @@ def main():
         totals_view["pnl_pct"] = totals_view["pnl_pct"].map(lambda x: f"{float(x) * 100:.2f}%")
 
         st.markdown("### By Currency")
-        st.dataframe(totals_view, use_container_width=True, hide_index=True)
+        st.dataframe(totals_view, width="stretch", hide_index=True)
 
         detail_view = detail.copy()
         detail_view = detail_view.rename(
