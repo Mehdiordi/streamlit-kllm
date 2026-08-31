@@ -41,6 +41,9 @@ MANUAL_EXTERNAL_SUFFIX = "-External"
 BANK_REVOLUT = "revolut"
 BANK_JYSKE = "jyske"
 BANK_MANUAL = "manual"
+PERSON_MEHDI = "mehdi"
+PERSON_KAROLINE = "karoline"
+CATEGORY_PERSONAL = "Personal"
 
 
 _expense_config_cache: dict[Path, tuple[float, dict[str, str], dict[int, float]]] = {}
@@ -891,6 +894,14 @@ def _bank_series(frame: pd.DataFrame) -> pd.Series:
     return bank.fillna(BANK_REVOLUT)
 
 
+def _person_series(frame: pd.DataFrame) -> pd.Series:
+    """Person tag so Mehdi and Karoline refunds never offset each other."""
+    if "person" not in frame.columns:
+        return pd.Series(PERSON_MEHDI, index=frame.index, dtype="object")
+    person = frame["person"].astype(str).str.casefold().str.strip()
+    return person.replace({"": PERSON_MEHDI, "nan": PERSON_MEHDI, "none": PERSON_MEHDI}).fillna(PERSON_MEHDI)
+
+
 def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, dict[str, object]]:
     """Return per-month details of refunds that offset expenses in earlier months.
 
@@ -944,6 +955,27 @@ def refund_cross_month_summary(base: pd.DataFrame) -> dict[str, dict[str, object
     return summary
 
 
+def _refund_eligible_expenses(exp: pd.DataFrame, refund: pd.Series) -> pd.DataFrame:
+    """Expenses this refund may offset: same description, or same Jyske category."""
+    same_desc = exp["_desc_norm"].eq(refund["_desc_norm"])
+    refund_cat = str(refund.get("_category", "")).strip()
+    same_jyske_cat = pd.Series(False, index=exp.index)
+    if (
+        refund_cat
+        and refund_cat not in {"nan", "None", "<NA>"}
+        and str(refund.get("_bank", "")).casefold() == BANK_JYSKE
+    ):
+        same_jyske_cat = exp["_bank"].eq(BANK_JYSKE) & exp["_category"].eq(refund_cat)
+    return exp[
+        (same_desc | same_jyske_cat)
+        & exp["_bank"].eq(refund["_bank"])
+        & exp["_person"].eq(refund["_person"])
+        & exp["_completed"].notna()
+        & exp["_completed"].le(refund["_completed"])
+        & exp["_remaining_spend"].gt(0)
+    ]
+
+
 def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
     """DEBUG: Show refund-to-expense allocations.
     
@@ -967,6 +999,10 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
     exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
     exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
     exp["_bank"] = _bank_series(exp)
+    exp["_person"] = _person_series(exp)
+    exp["_category"] = (
+        exp["category"].astype(str).str.strip() if "category" in exp.columns else ""
+    )
 
     ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
     if ref.empty:
@@ -976,6 +1012,10 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
     ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
     ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
     ref["_bank"] = _bank_series(ref)
+    ref["_person"] = _person_series(ref)
+    ref["_category"] = (
+        ref["category"].astype(str).str.strip() if "category" in ref.columns else ""
+    )
     ref = ref.loc[
         ref["_refund_amt"].notna()
         & ref["_completed"].notna()
@@ -993,13 +1033,7 @@ def debug_refund_allocations(base: pd.DataFrame, verbose: bool = True) -> pd.Dat
         if remaining_refund <= 0:
             continue
 
-        eligible = exp[
-            exp["_desc_norm"].eq(refund["_desc_norm"])
-            & exp["_bank"].eq(refund["_bank"])
-            & exp["_completed"].notna()
-            & exp["_completed"].le(refund["_completed"])
-            & exp["_remaining_spend"].gt(0)
-        ]
+        eligible = _refund_eligible_expenses(exp, refund)
         if eligible.empty:
             continue
 
@@ -1059,6 +1093,10 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
     exp["_desc_norm"] = exp.get("description", pd.Series("", index=exp.index)).astype(str).map(normalize_text)
     exp["_completed"] = pd.to_datetime(exp.get("completed_date"), errors="coerce")
     exp["_bank"] = _bank_series(exp)
+    exp["_person"] = _person_series(exp)
+    exp["_category"] = (
+        exp["category"].astype(str).str.strip() if "category" in exp.columns else ""
+    )
 
     ref = base[base.get("type", "").astype(str).str.casefold().eq("refund")].copy()
     if ref.empty:
@@ -1068,6 +1106,10 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
     ref["_desc_norm"] = ref.get("description", pd.Series("", index=ref.index)).astype(str).map(normalize_text)
     ref["_completed"] = pd.to_datetime(ref.get("completed_date"), errors="coerce")
     ref["_bank"] = _bank_series(ref)
+    ref["_person"] = _person_series(ref)
+    ref["_category"] = (
+        ref["category"].astype(str).str.strip() if "category" in ref.columns else ""
+    )
     ref = ref.loc[
         ref["_refund_amt"].notna()
         & ref["_completed"].notna()
@@ -1084,13 +1126,7 @@ def _expense_spend_after_refunds(base: pd.DataFrame) -> pd.Series:
         if remaining_refund <= 0:
             continue
 
-        eligible = exp[
-            exp["_desc_norm"].eq(refund["_desc_norm"])
-            & exp["_bank"].eq(refund["_bank"])
-            & exp["_completed"].notna()
-            & exp["_completed"].le(refund["_completed"])
-            & exp["_remaining_spend"].gt(0)
-        ]
+        eligible = _refund_eligible_expenses(exp, refund)
         if eligible.empty:
             continue
 
@@ -1122,6 +1158,7 @@ def prepare_data_for_plotting(
     csv_path: str,
     manual_data_dir: str | Path = "data",
     jyske_csv_path: str | None = None,
+    karoline_jyske_csv_path: str | None = None,
 ) -> PreparedData:
     """End-to-end prep used by Streamlit plotting."""
     from jyske_processing import load_jyske_statement
@@ -1131,15 +1168,21 @@ def prepare_data_for_plotting(
     df["type"] = classify_type(df)
     df["source"] = BANK_REVOLUT
     df["bank"] = BANK_REVOLUT
+    df["person"] = PERSON_MEHDI
 
     manual = load_manual_expenses(manual_data_dir)
     if not manual.empty:
         manual["bank"] = BANK_MANUAL
+        manual["person"] = PERSON_MEHDI
         df = pd.concat([df, manual], ignore_index=True, sort=False)
 
-    jyske = load_jyske_statement(jyske_csv_path)
+    jyske = load_jyske_statement(jyske_csv_path, person=PERSON_MEHDI)
     if not jyske.empty:
         df = pd.concat([df, jyske], ignore_index=True, sort=False)
+
+    karoline = load_jyske_statement(karoline_jyske_csv_path, person=PERSON_KAROLINE)
+    if not karoline.empty:
+        df = pd.concat([df, karoline], ignore_index=True, sort=False)
 
     df = categorize_expenses(df)
     df = convert_to_dkk(df)
@@ -1152,17 +1195,19 @@ def prepare_data_for_plotting(
     base = base[base["amount_dkk"].notna()].copy()
     if not base.empty:
         base["bank"] = _bank_series(base)
+        base["person"] = _person_series(base)
 
     if base.empty or "completed_date" not in base.columns:
         totals = pd.DataFrame(columns=["expense", "income", "refund"])
-        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank"])
+        by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank", "person"])
     else:
         base["month"] = base["completed_date"].dt.to_period("M").astype(str)
         expense_after_refunds = _expense_spend_after_refunds(base)
+        mehdi_base = base[_person_series(base).eq(PERSON_MEHDI)].copy()
 
         types = ["expense", "income", "refund"]
         totals = (
-            base[base["type"].isin(types)]
+            mehdi_base[mehdi_base["type"].isin(types)]
             .assign(value_dkk=lambda x: x["amount_dkk"].abs())
             .groupby(["month", "type"])["value_dkk"]
             .sum()
@@ -1171,11 +1216,12 @@ def prepare_data_for_plotting(
 
         # Replace gross expense totals with net expense totals after refund allocation.
         if not expense_after_refunds.empty:
-            exp_rows = base.loc[expense_after_refunds.index].copy()
-            exp_rows["_net_spend"] = expense_after_refunds
-            net_exp_by_month = exp_rows.groupby("month")["_net_spend"].sum()
-            totals["expense"] = 0.0
-            totals.loc[net_exp_by_month.index, "expense"] = net_exp_by_month.values
+            exp_rows = mehdi_base.loc[mehdi_base.index.intersection(expense_after_refunds.index)].copy()
+            if not exp_rows.empty:
+                exp_rows["_net_spend"] = expense_after_refunds.reindex(exp_rows.index)
+                net_exp_by_month = exp_rows.groupby("month")["_net_spend"].sum()
+                totals["expense"] = 0.0
+                totals.loc[net_exp_by_month.index, "expense"] = net_exp_by_month.values
 
         for t in types:
             if t not in totals.columns:
@@ -1187,18 +1233,21 @@ def prepare_data_for_plotting(
             exp = exp.loc[exp.index.intersection(expense_after_refunds.index)].copy()
             exp["_net_spend"] = expense_after_refunds.reindex(exp.index).fillna(0.0)
             exp["bank"] = _bank_series(exp)
+            exp["person"] = _person_series(exp)
         if exp.empty or "_net_spend" not in exp.columns:
-            by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank"])
+            by_month_cat = pd.DataFrame(columns=["month", "category", "spend_dkk", "item_count", "bank", "person"])
         else:
             by_month_cat = (
                 exp.assign(spend_dkk=lambda x: x["_net_spend"])
-                .groupby(["month", "category", "bank"])["spend_dkk"]
+                .groupby(["month", "category", "bank", "person"])["spend_dkk"]
                 .agg(spend_dkk="sum", item_count="count")
                 .reset_index()
             )
 
     other_df = df.copy()
     other_df = other_df[success_mask].copy()
+    if "person" in other_df.columns:
+        other_df = other_df[_person_series(other_df).eq(PERSON_MEHDI)].copy()
     if "type" in other_df.columns:
         other_df = other_df[other_df["type"].astype(str).str.casefold().eq("expense")].copy()
     if "category" in other_df.columns:

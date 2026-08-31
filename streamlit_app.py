@@ -15,6 +15,9 @@ import invest_processing as inv
 from processing import (
     BANK_JYSKE,
     BANK_REVOLUT,
+    CATEGORY_PERSONAL,
+    PERSON_KAROLINE,
+    PERSON_MEHDI,
     PreparedData,
     add_category_mapping,
     append_manual_expense,
@@ -31,7 +34,10 @@ from processing import (
     successful_transaction_mask,
 )
 from jyske_processing import (
+    KAROLINE_JYSKE_CATEGORIES,
+    KAROLINE_SEARCH_DIRS,
     ensure_jyske_reference_merged,
+    ensure_karoline_jyske_reference_merged,
     jyske_template_path,
     saved_jyske_csv_path,
 )
@@ -51,15 +57,28 @@ def load_prepared(
     refresh_nonce: int,
     jyske_csv_path: str,
     jyske_version: float,
+    karoline_jyske_csv_path: str,
+    karoline_jyske_version: float,
 ) -> PreparedData:
     # Version args exist to invalidate the cache when source files change or user presses refresh.
     # Bump _schema_version whenever PreparedData's shape changes so cached results are rebuilt.
-    _schema_version = 3  # added bank to spend_by_month_category
-    _ = (fx_version, manual_version, csv_version, refresh_nonce, jyske_csv_path, jyske_version, _schema_version)
+    _schema_version = 8  # Mehdi Jyske leftover as Personal too
+    _ = (
+        fx_version,
+        manual_version,
+        csv_version,
+        refresh_nonce,
+        jyske_csv_path,
+        jyske_version,
+        karoline_jyske_csv_path,
+        karoline_jyske_version,
+        _schema_version,
+    )
     return prepare_data_for_plotting(
         csv_path,
         manual_data_dir="data",
         jyske_csv_path=jyske_csv_path or None,
+        karoline_jyske_csv_path=karoline_jyske_csv_path or None,
     )
 
 
@@ -584,6 +603,7 @@ def annual_spend_by_category(
     spend_by_month_category: pd.DataFrame,
     year: str | None,
     bank: str | None = None,
+    person: str | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Sum net spend by category for a calendar year, or all years if year is None."""
     df = spend_by_month_category.copy()
@@ -592,6 +612,8 @@ def annual_spend_by_category(
 
     if bank and "bank" in df.columns:
         df = df[df["bank"].astype(str).str.casefold().eq(bank)].copy()
+    if person and "person" in df.columns:
+        df = df[df["person"].astype(str).str.casefold().eq(person)].copy()
 
     df["month"] = df["month"].astype(str)
     if year:
@@ -615,8 +637,20 @@ def annual_spend_by_category(
     return out, months
 
 
-def _annual_bar_style() -> dict[str, object]:
+def _annual_bar_style(people: str | None = None) -> dict[str, object]:
     from matplotlib.colors import LinearSegmentedColormap
+
+    key = (people or "Mehdi").strip().casefold()
+    if key == "karoline":
+        # Charcoal, not pure black — still the German top stripe, readable on dark bg.
+        stops = ["#4f4f4f", "#DD0000", "#FFCC00"]
+        cmap_name = "flag_de"
+    elif key in {"all people", "all"}:
+        stops = ["#C8102E", "#F5F5F5", "#C8102E"]  # Danish
+        cmap_name = "flag_dk"
+    else:
+        stops = ["#239F40", "#F5F5F5", "#DA0000"]  # Iranian
+        cmap_name = "flag_ir"
 
     return {
         "bg": "#0e1117",
@@ -625,10 +659,7 @@ def _annual_bar_style() -> dict[str, object]:
         "track": "#1f2937",
         "grid": "#374151",
         "label": "#ffffff",
-        "cmap": LinearSegmentedColormap.from_list(
-            "annual_spend",
-            ["#9a3412", "#c2410c", "#ea580c", "#fdba74"],
-        ),
+        "cmap": LinearSegmentedColormap.from_list(cmap_name, stops),
         "bar_h": 0.26,
     }
 
@@ -658,11 +689,20 @@ def _annotate_bar_value(ax, x: float, y: float, text: str, *, fontsize: float = 
 
 
 def _annual_rank_colors(cmap, n: int) -> list:
-    rank_t = np.linspace(1.0, 0.22, n) if n > 1 else np.array([1.0])
-    return [cmap(t) for t in rank_t]
+    if n <= 1:
+        return [cmap(0.0)]
+    return [cmap(t) for t in np.linspace(0.0, 1.0, n)]
 
 
-def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
+def _outline_top_bar(bars, people: str | None) -> None:
+    """Light edge on Karoline's first (black) bar so it does not vanish on the dark chart."""
+    if not bars or (people or "").strip().casefold() != "karoline":
+        return
+    bars[0].set_edgecolor("#d4d4d8")
+    bars[0].set_linewidth(0.9)
+
+
+def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str | None = None) -> None:
     """Full-width ranked bar chart of annual spend by category."""
     from matplotlib.ticker import FuncFormatter
 
@@ -674,7 +714,7 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     n = len(s)
     total = float(s.sum())
     max_val = float(s.max()) if n else 0.0
-    style = _annual_bar_style()
+    style = _annual_bar_style(people)
     colors = _annual_rank_colors(style["cmap"], n)
     bar_h = float(style["bar_h"])
 
@@ -686,11 +726,12 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
     y = np.arange(n)
     ax.barh(y, np.full(n, max_val if max_val > 0 else 1.0), color=style["track"], height=bar_h, zorder=0)
     bars = ax.barh(y, s.values, color=colors, height=bar_h, zorder=1)
+    _outline_top_bar(bars, people)
 
     ax.invert_yaxis()
     ax.set_yticks(y)
     y_labels = [f"{cat}  ({int(counts.loc[cat])})" for cat in s.index]
-    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=8)
+    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=6.5)
     ax.tick_params(axis="y", length=0, pad=4)
     ax.tick_params(axis="x", colors=style["muted"], labelsize=7, length=0)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
@@ -735,6 +776,7 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str) -> None:
 def annual_spend_by_year_category(
     spend_by_month_category: pd.DataFrame,
     bank: str | None = None,
+    person: str | None = None,
 ) -> pd.DataFrame:
     """Net spend by category for every calendar year in the statement."""
     df = spend_by_month_category.copy()
@@ -743,6 +785,8 @@ def annual_spend_by_year_category(
 
     if bank and "bank" in df.columns:
         df = df[df["bank"].astype(str).str.casefold().eq(bank)].copy()
+    if person and "person" in df.columns:
+        df = df[df["person"].astype(str).str.casefold().eq(person)].copy()
 
     df["month"] = df["month"].astype(str)
     df["year"] = df["month"].str[:4]
@@ -756,7 +800,7 @@ def annual_spend_by_year_category(
     return out
 
 
-def plot_annual_year_split(by_year: pd.DataFrame) -> None:
+def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> None:
     """One slim bar chart per year, same categories and scale so bars line up."""
     from matplotlib.ticker import FuncFormatter
 
@@ -787,7 +831,7 @@ def plot_annual_year_split(by_year: pd.DataFrame) -> None:
     n_cat = len(categories)
     n_year = len(years)
     max_val = float(spend.to_numpy().max()) if n_cat else 0.0
-    style = _annual_bar_style()
+    style = _annual_bar_style(people)
     colors = _annual_rank_colors(style["cmap"], n_cat)
     bar_h = float(style["bar_h"])
 
@@ -816,11 +860,12 @@ def plot_annual_year_split(by_year: pd.DataFrame) -> None:
         year_total = float(vals.sum())
         ax.barh(y, np.full(n_cat, max_val if max_val > 0 else 1.0), color=style["track"], height=year_bar_h, zorder=0)
         bars = ax.barh(y, vals, color=colors, height=year_bar_h, zorder=1)
+        _outline_top_bar(bars, people)
         if i == 0:
             ax.invert_yaxis()
         ax.set_yticks(y)
         if i == 0:
-            ax.set_yticklabels(categories, color=style["fg"], fontsize=7.5)
+            ax.set_yticklabels(categories, color=style["fg"], fontsize=6.0)
             ax.tick_params(axis="y", length=0, pad=4)
         else:
             ax.tick_params(axis="y", length=0, labelleft=False)
@@ -862,7 +907,12 @@ def plot_annual_year_split(by_year: pd.DataFrame) -> None:
     st.pyplot(fig, clear_figure=True, width="stretch")
 
 
-def _period_refund_total(df: pd.DataFrame, year: str | None, bank: str | None) -> tuple[float, int]:
+def _period_refund_total(
+    df: pd.DataFrame,
+    year: str | None,
+    bank: str | None,
+    person: str | None = None,
+) -> tuple[float, int]:
     if df.empty or "type" not in df.columns:
         return 0.0, 0
     r = df[df["type"].astype(str).str.casefold().eq("refund")].copy()
@@ -870,6 +920,8 @@ def _period_refund_total(df: pd.DataFrame, year: str | None, bank: str | None) -
         return 0.0, 0
     if bank and "bank" in r.columns:
         r = r[r["bank"].astype(str).str.casefold().eq(bank)].copy()
+    if person and "person" in r.columns:
+        r = r[r["person"].astype(str).str.casefold().eq(person)].copy()
     r["completed_date"] = pd.to_datetime(r.get("completed_date"), errors="coerce")
     if year:
         r = r[r["completed_date"].dt.year == int(year)].copy()
@@ -877,7 +929,29 @@ def _period_refund_total(df: pd.DataFrame, year: str | None, bank: str | None) -
     return float(amt.sum()), int(amt.notna().sum())
 
 
-def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None) -> None:
+def _prepared_for_expenses(prepared: PreparedData) -> PreparedData:
+    """Karoline is Annual-only; Personal leftover is Annual Expense=All only."""
+    df = prepared.df
+    spend = prepared.spend_by_month_category
+    if not df.empty and "person" in df.columns:
+        df = df[df["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
+    if not spend.empty and "person" in spend.columns:
+        spend = spend[spend["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
+    if not spend.empty and "category" in spend.columns:
+        spend = spend[spend["category"].astype(str).str.strip().ne(CATEGORY_PERSONAL)].copy()
+    return PreparedData(
+        df=df,
+        totals_by_month=prepared.totals_by_month,
+        spend_by_month_category=spend,
+        other_expenses=prepared.other_expenses,
+    )
+
+
+def render_annual_tab(
+    prepared: PreparedData,
+    jyske_csv_path: str | None = None,
+    karoline_jyske_csv_path: str | None = None,
+) -> None:
     if st.button("Refresh Annual Data", key="refresh_annual_data"):
         refresh_dashboard_data()
 
@@ -894,7 +968,7 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
 
     bank_spend = spend
     if bank_key and not spend.empty and "bank" in spend.columns:
-        bank_spend = spend[spend["bank"].astype(str).str.casefold().eq(bank_key)].copy()
+        bank_spend = bank_spend[bank_spend["bank"].astype(str).str.casefold().eq(bank_key)].copy()
 
     if bank_choice == "Jyske" and bank_spend.empty:
         _render_jyske_placeholder(jyske_csv_path)
@@ -915,7 +989,55 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
         help="Calendar-year totals. “All years” sums every month in the statement.",
     )
     year = None if selected == "All years" else selected
-    annual, months = annual_spend_by_category(bank_spend, year, bank=bank_key)
+
+    people_col, expense_col = st.columns(2, gap="small")
+    with people_col:
+        people_choice = st.radio(
+            "People",
+            options=["Mehdi", "Karoline", "All people"],
+            horizontal=True,
+            index=0,
+            key="annual_people",
+            help="Karoline is Jyske only and appears only on this Annual tab.",
+        )
+    with expense_col:
+        expense_choice = st.radio(
+            "Expense",
+            options=["Common", "All"],
+            horizontal=True,
+            index=0,
+            key="annual_expense",
+            help="Common is the mapped categories. All adds leftover Jyske spend as Personal (Revolut is unchanged).",
+        )
+    person_key = {"Mehdi": PERSON_MEHDI, "Karoline": PERSON_KAROLINE, "All people": None}[people_choice]
+    show_personal = expense_choice == "All"
+
+    if person_key and "person" in bank_spend.columns:
+        bank_spend = bank_spend[bank_spend["person"].astype(str).str.casefold().eq(person_key)].copy()
+    if "category" in bank_spend.columns:
+        cats = bank_spend["category"].astype(str).str.strip()
+        if people_choice == "Karoline":
+            allowed = set(KAROLINE_JYSKE_CATEGORIES)
+            if show_personal:
+                allowed.add(CATEGORY_PERSONAL)
+            bank_spend = bank_spend[cats.isin(allowed)].copy()
+        elif not show_personal:
+            bank_spend = bank_spend[cats.ne(CATEGORY_PERSONAL)].copy()
+
+    if people_choice == "Karoline" and bank_choice == "Revolut":
+        st.info("Karoline has no Revolut account. Choose Jyske or All banks.")
+        return
+
+    if people_choice == "Karoline" and bank_spend.empty:
+        st.info(
+            "No Karoline Jyske statement yet. Drop a CSV or PDF into "
+            f"`{KAROLINE_SEARCH_DIRS[0]}`. A reference will be kept there and updated on each upload."
+        )
+        if karoline_jyske_csv_path:
+            st.caption(f"Found `{karoline_jyske_csv_path}` but it produced no rows.")
+        return
+
+    annual, months = annual_spend_by_category(bank_spend, year, bank=bank_key, person=person_key)
     if annual.empty:
         st.info("No categorized spend for this period.")
         return
@@ -926,23 +1048,24 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
     top = annual.iloc[0]
     top_share = (100.0 * float(top["spend_dkk"]) / total) if total > 0 else 0.0
     bank_note = bank_choice if bank_choice != "All banks" else "all banks"
-    ref_total, ref_n = _period_refund_total(prepared.df, year, bank_key)
+    people_note = people_choice if people_choice != "All people" else "all people"
+    ref_total, ref_n = _period_refund_total(prepared.df, year, bank_key, person=person_key)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total spend", f"{fmt_dkk(total)} DKK")
     c2.metric("Refunds", f"{fmt_dkk(ref_total)} DKK")
     c3.metric("Categories", f"{len(annual)}")
     c4.metric("Largest category", f"{top['category']} · {top_share:.0f}%")
-    cap = f"{period_label} · {bank_note} · {n_months} months" if period_label else bank_note
+    cap = f"{period_label} · {bank_note} · {people_note} · {n_months} months" if period_label else f"{bank_note} · {people_note}"
     if ref_n:
         cap = f"{cap} · {ref_n} refunds"
     st.caption(cap)
 
-    plot_annual_categories(annual, period_label or selected)
+    plot_annual_categories(annual, period_label or selected, people=people_choice)
 
-    year_split = annual_spend_by_year_category(bank_spend, bank=bank_key)
+    year_split = annual_spend_by_year_category(bank_spend, bank=bank_key, person=person_key)
     if year_split["year"].nunique() > 1:
-        plot_annual_year_split(year_split)
+        plot_annual_year_split(year_split, people=people_choice)
 
     table = annual.copy()
     table["share"] = table["spend_dkk"] / total if total else 0.0
@@ -958,6 +1081,101 @@ def render_annual_tab(prepared: PreparedData, jyske_csv_path: str | None = None)
     )
     st.dataframe(view, use_container_width=True, hide_index=True, height=min(520, 42 * len(view) + 38))
 
+    if people_choice in {"Mehdi", "Karoline"} and bank_choice == "Jyske":
+        _render_personal_breakdown(prepared.df, year=year, person=person_key, people_label=people_choice)
+
+
+_PERSONAL_GROUP_NEEDLES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Groceries", ("rema", "netto", "foetex", "føtex", "lidl", "aldi", "meny", "7-eleven", "7-11", "kvickly")),
+    ("Shopping", ("uniqlo", "hm ", "boozt", "zalando", "amazon", "amzn", "tk maxx", "name it", "ikea", "thomann", "nike")),
+    ("Eat Out", ("emmerys", "joe", "olea", "brew", "mcdonald", "pizza", "falafel", "kebab", "baest", "halvleg", "novo nordisk vtc")),
+    ("Travel", ("easyjet", "sas", "airbnb", "hotel", "dfds", "norwegian", "parkman", "rejsekort", "dsb", "bolt", "apcoa")),
+    ("Bills / health", ("akademiker", "djøf", "forsikring", "personskat", "sktst", "tandlæge", "tandforsik", "odontolog", "apotek")),
+    ("Fuel", ("uno-x", "circle k", "shell", "esso", "q8", "ingo")),
+    ("Phone / streaming", ("netflix", "disney", "lebara", "chatgpt", "apple.com", "hiper", "fastspeed")),
+)
+
+
+def _personal_group(description: object) -> str:
+    t = str(description).casefold()
+    for name, needles in _PERSONAL_GROUP_NEEDLES:
+        if any(n in t for n in needles):
+            return name
+    return "Other"
+
+
+def _render_personal_breakdown(
+    df: pd.DataFrame,
+    *,
+    year: str | None,
+    person: str | None,
+    people_label: str,
+) -> None:
+    """Leftover Jyske Personal rows — rebuilt from the current statement on each upload."""
+    if df is None or df.empty:
+        return
+    out = df.copy()
+    if "category" not in out.columns:
+        return
+    out = out[out["category"].astype(str).str.strip().eq(CATEGORY_PERSONAL)].copy()
+    if "bank" in out.columns:
+        out = out[out["bank"].astype(str).str.casefold().eq(BANK_JYSKE)].copy()
+    if person and "person" in out.columns:
+        out = out[out["person"].astype(str).str.casefold().eq(person)].copy()
+    if "type" in out.columns:
+        out = out[out["type"].astype(str).str.casefold().eq("expense")].copy()
+    out["completed_date"] = pd.to_datetime(out.get("completed_date"), errors="coerce")
+    out = out[out["completed_date"].notna()].copy()
+    if year:
+        out = out[out["completed_date"].dt.year == int(year)].copy()
+    spend = pd.to_numeric(out.get("amount_dkk", out.get("amount_net")), errors="coerce").abs()
+    out = out.loc[spend.notna()].copy()
+    out["spend_dkk"] = spend.loc[out.index]
+    if out.empty:
+        st.caption(f"No Personal leftover on Jyske for {people_label} in this period.")
+        return
+
+    out["group"] = out["description"].map(_personal_group)
+    groups = (
+        out.groupby("group", as_index=False)
+        .agg(n=("spend_dkk", "count"), spend_dkk=("spend_dkk", "sum"))
+        .sort_values("spend_dkk", ascending=False)
+    )
+    total = float(groups["spend_dkk"].sum())
+    groups["share"] = groups["spend_dkk"] / total if total else 0.0
+    texts = (
+        out.groupby("description", as_index=False)
+        .agg(n=("spend_dkk", "count"), spend_dkk=("spend_dkk", "sum"))
+        .sort_values("spend_dkk", ascending=False)
+        .head(12)
+    )
+
+    st.markdown("")
+    st.caption(
+        f"Personal leftover · {people_label} · Jyske · {fmt_dkk(total)} DKK · {len(out):,} txs"
+        " · follows the latest upload"
+    )
+    gcol, tcol = st.columns(2, gap="small")
+    with gcol:
+        gview = pd.DataFrame(
+            {
+                "group": groups["group"],
+                "dkk": groups["spend_dkk"].map(lambda x: fmt_dkk(float(x))),
+                "share": groups["share"].map(lambda x: f"{100.0 * float(x):.0f}%"),
+                "n": groups["n"].map(lambda x: f"{int(x):,}"),
+            }
+        )
+        st.dataframe(gview, use_container_width=True, hide_index=True, height=min(280, 36 * len(gview) + 38))
+    with tcol:
+        tview = pd.DataFrame(
+            {
+                "text": texts["description"].astype(str).str.slice(0, 42),
+                "dkk": texts["spend_dkk"].map(lambda x: fmt_dkk(float(x))),
+                "n": texts["n"].map(lambda x: f"{int(x):,}"),
+            }
+        )
+        st.dataframe(tview, use_container_width=True, hide_index=True, height=min(280, 36 * len(tview) + 38))
+
 
 def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
     template = jyske_template_path()
@@ -970,13 +1188,14 @@ def _render_jyske_placeholder(jyske_csv_path: str | None) -> None:
         st.caption(f"Found `{jyske_csv_path}` but it produced no rows. The Jyske parser likely needs adjusting.")
     else:
         st.caption(
-            f"Drop a new Mit Jyske CSV into your Numbers Documents folder "
+            f"Drop a new Mit Jyske CSV or PDF into your Numbers Documents folder "
             f"(typical name: `Your Name_YYYY-MM-DD-YYYY-MM-DD.csv`) or `{dest}`. "
             f"Column template: `{template}`."
         )
-    uploaded = st.file_uploader("Upload Jyske CSV", type=["csv"], key="jyske_csv_upload")
+    uploaded = st.file_uploader("Upload Jyske CSV or PDF", type=["csv", "pdf"], key="jyske_csv_upload")
     if uploaded is None:
         return
+    dest = Path("data") / Path(uploaded.name).name
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(uploaded.getvalue())
     merged = ensure_jyske_reference_merged()
@@ -1442,10 +1661,24 @@ def main():
         if jyske_merge.min_date and jyske_merge.max_date:
             span = f" ({jyske_merge.min_date} → {jyske_merge.max_date})"
         extra = f" · merged +{jyske_merge.added_rows}" if jyske_merge.added_rows else ""
-        st.caption(f"Jyske reference: {jyske_merge.path}{span}{extra}")
+        removed = f" · removed {len(jyske_merge.removed_files)} upload(s)" if jyske_merge.removed_files else ""
+        st.caption(f"Jyske reference (Mehdi): {jyske_merge.path}{span}{extra}{removed}")
         if jyske_merge.gap_warning:
             st.warning(jyske_merge.gap_warning)
     jyske_version = file_mtime(jyske_csv_path) if jyske_csv_path else 0.0
+
+    karoline_merge = ensure_karoline_jyske_reference_merged()
+    karoline_jyske_csv_path = karoline_merge.path if karoline_merge else None
+    if karoline_merge:
+        span = ""
+        if karoline_merge.min_date and karoline_merge.max_date:
+            span = f" ({karoline_merge.min_date} → {karoline_merge.max_date})"
+        extra = f" · merged +{karoline_merge.added_rows}" if karoline_merge.added_rows else ""
+        removed = f" · removed {len(karoline_merge.removed_files)} upload(s)" if karoline_merge.removed_files else ""
+        st.caption(f"Jyske reference (Karoline): {karoline_merge.path}{span}{extra}{removed}")
+        if karoline_merge.gap_warning:
+            st.warning(karoline_merge.gap_warning)
+    karoline_jyske_version = file_mtime(karoline_jyske_csv_path) if karoline_jyske_csv_path else 0.0
 
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
     with st.spinner("Preparing FX cache (first run may take a bit)…"):
@@ -1479,7 +1712,10 @@ def main():
             refresh_nonce,
             jyske_csv_path or "",
             jyske_version,
+            karoline_jyske_csv_path or "",
+            karoline_jyske_version,
         )
+        prepared = _prepared_for_expenses(prepared)
 
         # Display max transaction date
         if not prepared.df.empty and "completed_date" in prepared.df.columns:
@@ -1598,8 +1834,10 @@ def main():
             refresh_nonce,
             jyske_csv_path or "",
             jyske_version,
+            karoline_jyske_csv_path or "",
+            karoline_jyske_version,
         )
-        render_annual_tab(prepared_annual, jyske_csv_path)
+        render_annual_tab(prepared_annual, jyske_csv_path, karoline_jyske_csv_path)
 
     with tabs[1]:
         if st.button("Refresh Investment Data", key="refresh_investment_data"):
