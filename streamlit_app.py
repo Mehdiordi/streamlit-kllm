@@ -965,11 +965,12 @@ def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> 
     _show_fig(fig)
 
 
-_KAROLINE_HOUSEHOLD_CATS = ("Kids Education", "Apartments", "Energy")
+_KAROLINE_HOUSEHOLD_CATS = ("Kids Education", "Apartments", "Energy", "Ice Hockey")
 _KAROLINE_HOUSEHOLD_COLORS = {
     "Kids Education": "#C56A3A",
     "Apartments": "#8D8176",
     "Energy": "#3F5D51",
+    "Ice Hockey": "#4A5878",
 }
 
 
