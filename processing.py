@@ -18,6 +18,7 @@ import calendar
 import csv
 from datetime import datetime
 import logging
+import os
 import re
 import shutil
 import unicodedata
@@ -82,6 +83,26 @@ def _to_float_maybe(value: object) -> float | None:
     return None
 
 
+def _list_dir_files(search_dir: str | Path, suffixes: tuple[str, ...] = (".csv",)) -> list[Path]:
+    """List files in a folder. Uses os.listdir so newly dropped iCloud/Numbers files are visible."""
+    base = Path(search_dir)
+    if not base.exists() or not base.is_dir():
+        return []
+    want = {s.casefold() for s in suffixes}
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    out: list[Path] = []
+    for name in names:
+        if Path(name).suffix.casefold() not in want:
+            continue
+        p = base / name
+        if p.is_file():
+            out.append(p)
+    return out
+
+
 def _find_latest_statement_csv(search_dir: str, name_contains: str) -> str:
     """Pick the most recent statement CSV whose filename contains the given token.
 
@@ -94,7 +115,7 @@ def _find_latest_statement_csv(search_dir: str, name_contains: str) -> str:
         raise FileNotFoundError(f"Folder not found: {base}")
 
     token = name_contains.casefold()
-    candidates = [p for p in base.glob("*.csv") if token in p.name.casefold()]
+    candidates = [p for p in _list_dir_files(base) if token in p.name.casefold()]
     if not candidates:
         raise FileNotFoundError(f"No CSV files containing '{name_contains}' in {base}")
 
@@ -157,9 +178,11 @@ def cleanup_outdated_account_statement_csvs(
 
     deleted: list[str] = []
     prefix_cf = prefix.casefold()
-    for p in base.glob("*.csv"):
-        # Hard safety guard for manual data persistence.
+    for p in _list_dir_files(base):
+        # Hard safety guard for manual data persistence and the annual Jyske reference.
         if p.name == MANUAL_EXPENSES_FILENAME:
+            continue
+        if "jyske_reference" in p.name.casefold():
             continue
         if not p.name.casefold().startswith(prefix_cf):
             continue

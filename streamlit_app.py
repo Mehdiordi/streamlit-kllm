@@ -15,6 +15,7 @@ from fx_cache import FX_CACHE_TO_CCY, load_fx_cache_series
 import invest_processing as inv
 from processing import (
     BANK_JYSKE,
+    BANK_MANUAL,
     BANK_REVOLUT,
     CATEGORY_PERSONAL,
     PERSON_KAROLINE,
@@ -986,21 +987,70 @@ def _period_refund_total(
     return float(amt.sum()), int(amt.notna().sum())
 
 
+def _month_totals_from_df(df: pd.DataFrame) -> pd.DataFrame:
+    empty = pd.DataFrame(columns=["expense", "income", "refund"])
+    if df.empty or "completed_date" not in df.columns or "type" not in df.columns:
+        return empty
+    tmp = df.copy()
+    tmp["completed_date"] = pd.to_datetime(tmp["completed_date"], errors="coerce")
+    tmp = tmp[tmp["completed_date"].notna()].copy()
+    tmp["amount_dkk"] = pd.to_numeric(tmp.get("amount_dkk"), errors="coerce")
+    tmp = tmp[tmp["amount_dkk"].notna()].copy()
+    if tmp.empty:
+        return empty
+    tmp["month"] = tmp["completed_date"].dt.to_period("M").astype(str)
+    types = ["expense", "income", "refund"]
+    totals = (
+        tmp[tmp["type"].isin(types)]
+        .assign(value_dkk=lambda x: x["amount_dkk"].abs())
+        .groupby(["month", "type"])["value_dkk"]
+        .sum()
+        .unstack(fill_value=0.0)
+    )
+    for t in types:
+        if t not in totals.columns:
+            totals[t] = 0.0
+    return totals
+
+
+_EXPENSES_BANKS = {BANK_REVOLUT, BANK_MANUAL}
+
+
+def _is_expenses_bank(frame: pd.DataFrame) -> pd.Series:
+    """True for Revolut / manual rows. Jyske never belongs on the Expenses tab."""
+    bank = (
+        frame["bank"].astype(str).str.casefold().str.strip()
+        if "bank" in frame.columns
+        else pd.Series("", index=frame.index, dtype="object")
+    )
+    if "source" in frame.columns:
+        source = frame["source"].astype(str).str.casefold().str.strip()
+        bank = bank.where(bank.ne("") & bank.ne("nan"), source)
+    return bank.isin(_EXPENSES_BANKS)
+
+
 def _prepared_for_expenses(prepared: PreparedData) -> PreparedData:
-    """Karoline is Annual-only; Personal leftover is Annual Expense=All only."""
+    """Expenses tab is Revolut (+ manual). Jyske and Karoline stay on Annual only."""
     df = prepared.df
     spend = prepared.spend_by_month_category
-    if not df.empty and "person" in df.columns:
-        df = df[df["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
-    if not spend.empty and "person" in spend.columns:
-        spend = spend[spend["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
-    if not spend.empty and "category" in spend.columns:
-        spend = spend[spend["category"].astype(str).str.strip().ne(CATEGORY_PERSONAL)].copy()
+    other = prepared.other_expenses
+    if not df.empty:
+        if "person" in df.columns:
+            df = df[df["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
+        df = df[_is_expenses_bank(df)].copy()
+    if not spend.empty:
+        if "person" in spend.columns:
+            spend = spend[spend["person"].astype(str).str.casefold().ne(PERSON_KAROLINE)].copy()
+        spend = spend[_is_expenses_bank(spend)].copy()
+        if "category" in spend.columns:
+            spend = spend[spend["category"].astype(str).str.strip().ne(CATEGORY_PERSONAL)].copy()
+    if not other.empty:
+        other = other[_is_expenses_bank(other)].copy()
     return PreparedData(
         df=df,
-        totals_by_month=prepared.totals_by_month,
+        totals_by_month=_month_totals_from_df(df),
         spend_by_month_category=spend,
-        other_expenses=prepared.other_expenses,
+        other_expenses=other,
     )
 
 
@@ -1723,6 +1773,8 @@ def main():
             st.warning(karoline_merge.gap_warning)
     karoline_jyske_version = file_mtime(karoline_jyske_csv_path) if karoline_jyske_csv_path else 0.0
     file_lines = _file_source_lines(csv_path, jyske_merge, karoline_merge, savings_csv_path)
+    expenses_file_lines = _file_source_lines(csv_path, None, None, None)
+    investment_file_lines = _file_source_lines(csv_path, None, None, savings_csv_path)
 
     # FX cache: first run will download and build local CSVs (USD/EUR/GBP->DKK) which can take a bit.
     with st.spinner("Preparing FX cache (first run may take a bit)…"):
@@ -1744,7 +1796,7 @@ def main():
 
     tabs = st.tabs(["Expenses", "Investment", "Annual"])
 
-    with tabs[0], _file_sources_footer(file_lines):
+    with tabs[0], _file_sources_footer(expenses_file_lines):
         if st.button("Refresh Expenses Data", key="refresh_expenses_data"):
             refresh_dashboard_data()
 
@@ -1883,7 +1935,7 @@ def main():
         )
         render_annual_tab(prepared_annual, jyske_csv_path, karoline_jyske_csv_path)
 
-    with tabs[1], _file_sources_footer(file_lines):
+    with tabs[1], _file_sources_footer(investment_file_lines):
         if st.button("Refresh Investment Data", key="refresh_investment_data"):
             refresh_dashboard_data()
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import logging
+import os
 import re
 from typing import Iterable
 
@@ -264,8 +265,16 @@ def _iter_jyske_files(
         base = Path(folder)
         if not base.exists() or not base.is_dir():
             continue
-        for p in (*base.glob("*.csv"), *base.glob("*.pdf")):
-            if _is_jyske_export(p, any_jyske_file=any_jyske_file):
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            suffix = Path(name).suffix.casefold()
+            if suffix not in {".csv", ".pdf"}:
+                continue
+            p = base / name
+            if p.is_file() and _is_jyske_export(p, any_jyske_file=any_jyske_file):
                 candidates.append(p)
     return candidates
 
