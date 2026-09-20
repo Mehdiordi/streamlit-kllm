@@ -965,6 +965,138 @@ def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> 
     _show_fig(fig)
 
 
+_KAROLINE_HOUSEHOLD_CATS = ("Kids Education", "Apartments", "Energy")
+_KAROLINE_HOUSEHOLD_COLORS = {
+    "Kids Education": "#C56A3A",
+    "Apartments": "#8D8176",
+    "Energy": "#3F5D51",
+}
+
+
+def karoline_household_monthly(spend: pd.DataFrame, from_month: str = "2026-01") -> pd.DataFrame:
+    """Month × household-bill category matrix, newest month first."""
+    cols = list(_KAROLINE_HOUSEHOLD_CATS)
+    empty = pd.DataFrame(columns=cols)
+    if spend is None or spend.empty or "month" not in spend.columns:
+        return empty
+
+    df = spend.copy()
+    df["month"] = df["month"].astype(str)
+    df = df[df["month"] >= from_month].copy()
+    if "category" in df.columns:
+        df["category"] = df["category"].map(_display_category_name)
+        df = df[df["category"].isin(cols)].copy()
+
+    start = pd.Period(from_month, freq="M")
+    if df.empty:
+        return empty
+    end = pd.Period(str(df["month"].max()), freq="M")
+    if end < start:
+        return empty
+    months = [str(p) for p in pd.period_range(start, end, freq="M")]
+
+    pivot = (
+        df.groupby(["month", "category"], as_index=False)["spend_dkk"]
+        .sum()
+        .pivot(index="month", columns="category", values="spend_dkk")
+    )
+    pivot = pivot.reindex(index=months, columns=cols).fillna(0.0)
+    return pivot.sort_index(ascending=False)
+
+
+def plot_karoline_household_monthly(spend: pd.DataFrame) -> None:
+    """Clustered bars in two columns, zigzag: newest top-left, next top-right, then down."""
+    pivot = karoline_household_monthly(spend)
+    if pivot.empty or float(pivot.to_numpy().sum()) <= 0:
+        return
+
+    left = pivot.iloc[0::2]
+    right = pivot.iloc[1::2]
+    max_val = float(pivot.to_numpy().max())
+    style = _annual_bar_style("Karoline")
+
+    chips = "".join(
+        f"<span style='margin-left:0.9rem;white-space:nowrap'>"
+        f"<span style='color:{_KAROLINE_HOUSEHOLD_COLORS[cat]}'>●</span>"
+        f" {html.escape(cat)}</span>"
+        for cat in _KAROLINE_HOUSEHOLD_CATS
+    )
+    st.markdown(
+        "<p style='color:rgba(250,250,250,0.4);font-size:0.8rem;margin:0 0 0.3rem 0'>"
+        f"Household bills by month · from Jan 2026{chips}</p>",
+        unsafe_allow_html=True,
+    )
+    cols = st.columns(2, gap="medium")
+    with cols[0]:
+        _draw_karoline_household_column(left, max_val=max_val, style=style)
+    with cols[1]:
+        if not right.empty:
+            _draw_karoline_household_column(right, max_val=max_val, style=style)
+
+
+def _draw_karoline_household_column(
+    pivot: pd.DataFrame,
+    *,
+    max_val: float,
+    style: dict[str, object],
+) -> None:
+    from matplotlib.ticker import FuncFormatter
+
+    cats = list(pivot.columns)
+    months = list(pivot.index)
+    n_m = len(months)
+    n_c = len(cats)
+    month_totals = pivot.sum(axis=1)
+    bar_h = 0.09
+    group_span = n_c * bar_h + 0.035
+    y = np.arange(n_m) * group_span
+
+    fig_h = min(3.6, max(2.1, 0.28 * n_m + 0.55))
+    fig, ax = plt.subplots(figsize=(6.1, fig_h), dpi=130, layout="constrained")
+    fig.patch.set_facecolor(style["bg"])
+    ax.set_facecolor(style["bg"])
+
+    for i, cat in enumerate(cats):
+        offset = (i - (n_c - 1) / 2.0) * bar_h
+        vals = pivot[cat].to_numpy(dtype=float)
+        bars = ax.barh(
+            y + offset,
+            vals,
+            height=bar_h,
+            color=_KAROLINE_HOUSEHOLD_COLORS[cat],
+            zorder=1,
+            edgecolor="#0e1117",
+            linewidth=0.2,
+        )
+        pad = max(max_val * 0.012, 0.8)
+        for bar, val in zip(bars, vals):
+            if val < 1:
+                continue
+            y_mid = float(bar.get_y() + bar.get_height() / 2)
+            _annotate_bar_value(ax, val + pad, y_mid, fmt_dkk(val), fontsize=4.8)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(
+        [
+            f"{pd.Period(m, freq='M').strftime('%b %y')}  ·  {fmt_dkk(float(month_totals.loc[m]))}"
+            for m in months
+        ],
+        color=style["fg"],
+        fontsize=6.5,
+    )
+    ax.invert_yaxis()
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.tick_params(axis="x", colors=style["muted"], labelsize=6, length=0)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.set_xlabel("DKK", color=style["muted"], fontsize=6.5)
+    ax.set_xlim(0, max(1.0, max_val * 1.20))
+    ax.grid(True, axis="x", color=style["grid"], alpha=0.35, linewidth=0.5, zorder=0)
+    ax.set_axisbelow(True)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    _show_fig(fig)
+
+
 def _period_refund_total(
     df: pd.DataFrame,
     year: str | None,
@@ -1169,6 +1301,9 @@ def render_annual_tab(
     st.caption(cap)
 
     plot_annual_categories(annual, period_label or selected, people=people_choice)
+
+    if people_choice == "Karoline" and bank_choice == "Jyske":
+        plot_karoline_household_monthly(bank_spend)
 
     year_split = annual_spend_by_year_category(bank_spend, bank=bank_key, person=person_key)
     if year_split["year"].nunique() > 1:

@@ -83,8 +83,8 @@ JYSKE_REFUND_PREFIXES: tuple[str, ...] = (
 
 # Karoline: case-insensitive contains (ø/Ø folded). First match wins.
 KAROLINE_JYSKE_CONTAINS: tuple[tuple[str, str], ...] = (
-    ("rødovre kommune", "Home tax"),
-    ("sankt petri skole", "School"),
+    ("rødovre kommune", "Kids Education"),
+    ("sankt petri skole", "Kids Education"),
     ("ejerforeningen parkkanten", "Apartments"),
     ("andel energi", "Energy"),
     ("holdsport", "Ice Hockey"),
