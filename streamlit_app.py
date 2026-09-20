@@ -755,6 +755,11 @@ def _outline_top_bar(bars, people: str | None) -> None:
     bars[0].set_linewidth(0.9)
 
 
+def _annual_fig_height(n: int, *, extra: float = 0.50) -> float:
+    """Compact height; labels stay close, not spread out."""
+    return min(2.6, max(0.92, 0.10 * max(n, 1) + extra))
+
+
 def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str | None = None) -> None:
     """Full-width ranked bar chart of annual spend by category."""
     from matplotlib.ticker import FuncFormatter
@@ -771,7 +776,7 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
     colors = _annual_rank_colors(style["cmap"], n)
     bar_h = min(float(style["bar_h"]), 0.22)
 
-    fig_h = min(2.6, max(0.92, 0.10 * n + 0.50))
+    fig_h = _annual_fig_height(n, extra=0.50)
     fig, ax = plt.subplots(figsize=(12.2, fig_h), dpi=130, layout="constrained")
     fig.patch.set_facecolor(style["bg"])
     ax.set_facecolor(style["bg"])
@@ -784,7 +789,7 @@ def plot_annual_categories(annual: pd.DataFrame, period_label: str, people: str 
     ax.invert_yaxis()
     ax.set_yticks(y)
     y_labels = [f"{cat}  ({int(counts.loc[cat])})" for cat in s.index]
-    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=6.0)
+    ax.set_yticklabels(y_labels, color=style["fg"], fontsize=5.0)
     ax.tick_params(axis="y", length=0, pad=3)
     ax.tick_params(axis="x", colors=style["muted"], labelsize=6.5, length=0)
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
@@ -887,7 +892,7 @@ def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> 
     colors = _annual_rank_colors(style["cmap"], n_cat)
     bar_h = float(style["bar_h"])
 
-    fig_h = min(3.1, max(1.55, 0.105 * n_cat + 0.52))
+    fig_h = _annual_fig_height(n_cat, extra=0.52)
     fig_w = 12.2
     fig, axes = plt.subplots(
         1,
@@ -917,7 +922,7 @@ def plot_annual_year_split(by_year: pd.DataFrame, people: str | None = None) -> 
             ax.invert_yaxis()
         ax.set_yticks(y)
         if i == 0:
-            ax.set_yticklabels(categories, color=style["fg"], fontsize=6.0)
+            ax.set_yticklabels(categories, color=style["fg"], fontsize=5.0)
             ax.tick_params(axis="y", length=0, pad=4)
         else:
             ax.tick_params(axis="y", length=0, labelleft=False)
